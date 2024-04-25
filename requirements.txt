@@ -1,0 +1,8 @@
+datasets
+jupyterlab
+notebook
+rotary-embedding-torch
+simple-parsing
+torch
+transformers
+zstandard
