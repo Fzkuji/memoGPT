@@ -19,10 +19,10 @@ wandb_run_name = 'mini-gpt'
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
 batch_size = 32
-block_size = 32  # context of up to 256 previous characters
+block_size = 64  # context of up to 256 previous characters
 
 train_size = block_size * 16
-val_size = block_size * 16
+val_size = block_size * 512
 memory_size = block_size
 
 # 这个值挺好的
@@ -32,7 +32,7 @@ memory_size = block_size
 # baby GPT model :)
 n_layer = 1
 n_head = 6
-use_moe = False
+use_moe = True
 n_expert = 8
 n_expert_per_tok = 3
 n_embd = 384
