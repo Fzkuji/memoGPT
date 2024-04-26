@@ -27,6 +27,9 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
+from datasets import load_dataset
+from transformers import AutoTokenizer
+from torch.nn.utils.rnn import pad_sequence
 from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
@@ -135,6 +138,23 @@ def get_batch(split, context_len):
     else:
         x, y = x.to(device), y.to(device)
     return x, y
+
+# # rich man's data loader
+# dataset = load_dataset(
+#     "fzkuji/books3",
+#     token="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"
+# )
+# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
+# def get_batch(split, context_len):
+#     if split == 'train':
+#         data = tokenizer(dataset['train']['text'], truncation=False, padding=True, return_tensors='pt')
+#     else:
+#         data = tokenizer(dataset['val']['text'], truncation=False, padding=True, return_tensors='pt')
+#     x = data['input_ids']
+#     y = data['labels']
+#     if device_type == 'cuda':
+#         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+#     return x, y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
