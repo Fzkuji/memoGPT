@@ -65,10 +65,10 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
-        # print("config.vocab_size: ", config.vocab_size)
+        # print("configs.vocab_size: ", configs.vocab_size)
         self.transformer = nn.ModuleDict(dict(
             wte=nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe=nn.Embedding(config.block_size, config.n_embd),
+            # wpe=nn.Embedding(configs.block_size, configs.n_embd),
             drop=nn.Dropout(config.dropout),
             h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f=LayerNorm(config.n_embd, bias=config.bias),
@@ -143,7 +143,7 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None):
         b, t = idx.size()
 
-        # assert t <= self.config.max_size, f"Cannot forward sequence of length {t}, max size is only {self.config.max_size}"
+        # assert t <= self.configs.max_size, f"Cannot forward sequence of length {t}, max size is only {self.configs.max_size}"
         # pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
 
         # Detach memory before using it

@@ -27,13 +27,10 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from datasets import load_dataset
-from transformers import AutoTokenizer
-from torch.nn.utils.rnn import pad_sequence
-from model import GPTConfig, GPT
+from models.model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
+# default configs values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 out_dir = 'out'
 eval_interval = 2000
@@ -83,7 +80,7 @@ dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported
 compile = False # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-exec(open('configurator.py').read()) # overrides from command line or config file
+exec(open('configurator.py').read()) # overrides from command line or configs file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
@@ -139,23 +136,6 @@ def get_batch(split, context_len):
         x, y = x.to(device), y.to(device)
     return x, y
 
-# # rich man's data loader
-# dataset = load_dataset(
-#     "fzkuji/books3",
-#     token="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"
-# )
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
-# def get_batch(split, context_len):
-#     if split == 'train':
-#         data = tokenizer(dataset['train']['text'], truncation=False, padding=True, return_tensors='pt')
-#     else:
-#         data = tokenizer(dataset['val']['text'], truncation=False, padding=True, return_tensors='pt')
-#     x = data['input_ids']
-#     y = data['labels']
-#     if device_type == 'cuda':
-#         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-#     return x, y
-
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
@@ -190,7 +170,7 @@ elif init_from == 'resume':
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
-    # force these config attributes to be equal otherwise we can't even resume training
+    # force these configs attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
@@ -212,7 +192,7 @@ elif init_from.startswith('gpt2'):
     # initialize from OpenAI GPT-2 weights
     override_args = dict(dropout=dropout)
     model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
+    # read off the created configs params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = getattr(model.config, k)
 # crop down the model block size if desired, using model surgery
@@ -309,7 +289,7 @@ while True:
                     'model_args': model_args,
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
-                    'config': config,
+                    'configs': config,
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
