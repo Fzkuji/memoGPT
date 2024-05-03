@@ -6,3 +6,7 @@ simple-parsing
 torch
 transformers
 zstandard
+fairscale
+fire
+tiktoken
+blobfile

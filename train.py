@@ -27,7 +27,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from models.model import GPTConfig, GPT
+from models.gpt.model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # default configs values designed to train a gpt2 (124M) on OpenWebText
@@ -199,6 +199,7 @@ elif init_from.startswith('gpt2'):
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
+
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
