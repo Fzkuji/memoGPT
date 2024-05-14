@@ -1,5 +1,6 @@
 # init
+from .config import *
 from .memory import *
 from .networks import *
-from .model import GPT, GPTConfig
+from .utils import *
 

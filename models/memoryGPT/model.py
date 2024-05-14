@@ -14,10 +14,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+from . import MemoryConfig
 from .networks import LayerNorm, MLP, MemorySelfAttention, FeedForward, MoeArgs, MoeLayer
-
-
-
 
 
 class Block(nn.Module):
@@ -44,35 +43,10 @@ class Block(nn.Module):
         return x
 
 
-@dataclass
-class MemoryConfig:
-    max_batch_size: int = 64
-
-    memory_dim: int = 768
-    short_term_memory_size: int = 32
-    long_term_memory_layer: int = 4
-    long_term_memory_chunk_size: int = 8
-    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * long_term_memory_layer +
-                             [(short_term_memory_size - 1) * long_term_memory_chunk_size])
-
-    rope_theta: float = 500000
-    block_size: int = 4096
-    vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    use_moe: bool = False
-    n_expert: int = 16
-    n_expert_per_tok: int = 4
-    n_embd: int = memory_dim
-    dropout: float = 0.0
-    bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
-
 class GPT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert config.memory_size is not None
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
@@ -157,34 +131,33 @@ class GPT(nn.Module):
         # assert t <= self.configs.max_size, f"Cannot forward sequence of length {t}, max size is only {self.configs.max_size}"
         # pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
 
-        # Detach memory before using it
-        if self.memory is not None:
-            self.memory = [m.detach() for m in self.memory]  # Detach each tensor in memory
-
-        # Check if memory is None or not the expected shape, then initialize
-        if self.memory is None or self.memory[0].size(0) != b:
-            memory_seq = torch.full((b, self.config.memory_size), fill_value=self.config.vocab_size - 1,
-                                    device=idx.device)
-            self.memory = [None for _ in range(self.config.n_layer + 1)]
-            self.memory[0] = self.transformer.drop(
-                self.transformer.wte(memory_seq))  # token embeddings of shape (b, t, n_embd)
+        # # Detach memory before using it
+        # if self.memory is not None:
+        #     self.memory = [m.detach() for m in self.memory]  # Detach each tensor in memory
+        #
+        # # Check if memory is None or not the expected shape, then initialize
+        # if self.memory is None or self.memory[0].size(0) != b:
+        #     memory_seq = torch.full((b, self.config.memory_size), fill_value=self.config.vocab_size - 1,
+        #                             device=idx.device)
+        #     self.memory = [None for _ in range(self.config.n_layer + 1)]
+        #     self.memory[0] = self.transformer.drop(
+        #         self.transformer.wte(memory_seq))  # token embeddings of shape (b, t, n_embd)
 
         # 输出idx最大的值
         # print("idx max: ", idx.max())
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        tok_emb = self.transformer.drop(tok_emb)
+        # tok_emb = self.transformer.drop(tok_emb)
 
         tok_emb_sections = self.split_sequence(tok_emb, self.config.block_size)
 
         xs = []
         for tok_emb_section in tok_emb_sections:
             x = tok_emb_section
-            for i in range(self.config.n_layer):
-                intermediate = self.transformer.h[i](torch.cat([self.memory[i], x], dim=1))
-                x = intermediate[:, self.config.memory_size:, :]
-                self.memory[i + 1] = intermediate[:, :self.config.memory_size, :]
+            for block in self.transformer.h:
+                x = block(x)
+                # self.memory[i + 1] = intermediate[:, :self.config.memory_size, :]
             xs.append(x)
 
         x = torch.cat(xs, dim=1)

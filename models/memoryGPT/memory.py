@@ -1,15 +1,15 @@
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
 
-from models.memoryGPT.model import MemoryConfig
-from models.memoryGPT.utils import apply_rotary_emb
+from .config import MemoryConfig
+from .utils import apply_rotary_emb
 
 
-class MemoryPool:
+class MemoryPool(nn.Module):
     """ A simple pool for storing tensors with a fixed capacity """
 
     def __init__(self, capacity, *tensor_dims, max_batch_size=64):
+        super(MemoryPool, self).__init__()
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims
@@ -44,7 +44,7 @@ class MemoryPool:
         # self.pool_v.fill_(0)
 
 
-class MemoryQueue:
+class MemoryQueue(nn.Module):
     """ A simple queue for storing tensors with a fixed capacity
 
     # Example usage
@@ -62,6 +62,7 @@ class MemoryQueue:
     """
 
     def __init__(self, capacity, *tensor_dims, max_batch_size=64):
+        super(MemoryQueue, self).__init__()
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims  # Dimensions of the tensor you expect to store
@@ -103,11 +104,17 @@ class MemoryQueue:
             return False
 
     def update_rotary_emb(self, freqs_cis):
-        self.queue_k, self.queue_v = apply_rotary_emb(self.queue_k, self.queue_v, freqs_cis)
+        if self.queue_q is None:
+            return
+        k, v = apply_rotary_emb(self.queue_k.transpose(1, 2), self.queue_v.transpose(1, 2), freqs_cis)
+        self.queue_k, self.queue_v = k.transpose(1, 2), v.transpose(1, 2)
 
     def get_all(self, batch_size=0):
         """ Return a tensor containing all elements in the queue """
-        return self.queue_q[:batch_size], self.queue_k[:batch_size], self.queue_v[:batch_size]
+        if self.queue_q is None:
+            return None
+        else:
+            return self.queue_q[:batch_size], self.queue_k[:batch_size], self.queue_v[:batch_size]
 
     def get_len(self):
         if self.queue_k is None:
@@ -120,14 +127,14 @@ class Memory(nn.Module):
         super(Memory, self).__init__()
         self.config = config
 
-        assert config.long_term_memory_size % config.short_term_memory_size == 0, "Long-term memory size should be a multiple of short-term memory size"
-        self.theta_step = config.long_term_memory_size // config.short_term_memory_size
+        # assert config.long_term_memory_size[0] % config.short_term_memory_size == 0, "Long-term memory size should be a multiple of short-term memory size"
+        self.theta_step = config.long_term_memory_size[0] // config.short_term_memory_size
 
         # Initialize the long-term memory with MemoryQueue
         self.long_term_memory = nn.ModuleList(
             [
                 MemoryQueue(i, config.memory_dim, max_batch_size=config.max_batch_size)
-                for i in range(config.long_term_memory_size)
+                for i in config.long_term_memory_size
             ]
         )
 
@@ -167,15 +174,27 @@ class Memory(nn.Module):
         for memory in self.long_term_memory:
             memory.update_rotary_emb(freqs_cis)
         for memory in self.long_term_memory:
-            carry_over = memory.push(tensor_q, tensor_k, tensor_v)
-            if not carry_over:
-                break
+            if tensor_q is not None:
+                carry_over = memory.push(tensor_q, tensor_k, tensor_v)
+                if not carry_over:
+                    break
 
     def update_short_term_memory(self, tensor):
         self.short_term_memory.update(tensor)
 
     def get_all(self, batch_size):
+        if self.long_term_memory[0].queue_q is None:
+            return self.short_term_memory.get_all(batch_size)
         return torch.cat(
             [memory.get_all(batch_size) for memory in self.long_term_memory[::-1]] + [self.short_term_memory.get_all(batch_size)],
             dim=1,
         )
+
+    def get_long_term_memory(self, batch_size):
+        if self.long_term_memory[0].queue_q is None:
+            return None, None, None
+        return torch.cat(
+            [memory.get_all(batch_size) for memory in self.long_term_memory[::-1]],
+            dim=1,
+        )
+

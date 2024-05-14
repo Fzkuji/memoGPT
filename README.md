@@ -38,7 +38,7 @@ This creates a `train.bin` and `val.bin` in that data directory. Now it is time 
 **I have a GPU**. Great, we can quickly train a baby GPT with the settings provided in the [config/train_shakespeare_char.py](configs/train_shakespeare_char.py) config file:
 
 ```
-$ python train.py config/train_shakespeare_char.py
+$ python train.py configs/train_shakespeare_char.py
 ```
 
 If you peek inside it, you'll see that we're training a GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697. Based on the configuration, the model checkpoints are being written into the `--out_dir` directory `out-shakespeare-char`. So once the training finishes we can sample from the best model by pointing the sampling script at this directory:

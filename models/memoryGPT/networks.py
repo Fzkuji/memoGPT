@@ -14,8 +14,9 @@ import torch.nn.functional as F
 from simple_parsing.helpers import Serializable
 from torch import nn
 
-from .memory import Memory, MemoryConfig
-from .utils import precompute_freqs_cis
+from .memory import Memory
+from .config import MemoryConfig
+from .utils import precompute_freqs_cis, apply_rotary_emb
 
 
 class LayerNorm(nn.Module):
@@ -141,7 +142,7 @@ class MemorySelfAttention(nn.Module):
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", create_memory_mask(config.memory_size, config.block_size))
+            self.register_buffer("bias", create_memory_mask(config.block_size, config.block_size))
             # print(self.bias)
 
         # 实例化RotaryEmbedding
@@ -151,49 +152,56 @@ class MemorySelfAttention(nn.Module):
             theta=config.rope_theta,
         )
 
-        self.cache_k = torch.zeros(
-            (
-                config.max_batch_size,
-                config.block_size,
-                self.n_local_kv_heads,
-                self.head_dim,
-            )
-        ).cuda()
-        self.cache_v = torch.zeros(
-            (
-                config.max_batch_size,
-                config.block_size,
-                self.n_local_kv_heads,
-                self.head_dim,
-            )
-        ).cuda()
+        # self.cache_k = torch.zeros(
+        #     (
+        #         config.max_batch_size,
+        #         config.block_size,
+        #         self.n_local_kv_heads,
+        #         self.head_dim,
+        #     )
+        # ).cuda()
+        # self.cache_v = torch.zeros(
+        #     (
+        #         config.max_batch_size,
+        #         config.block_size,
+        #         self.n_local_kv_heads,
+        #         self.head_dim,
+        #     )
+        # ).cuda()
 
     def forward(self, x):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
-        memory = self.memory.get_all(B)
-        short_term_memory = memory.short_term_memory.get_all(B)
+        short_term_memory = self.memory.short_term_memory.get_all(B).to(x.device)
 
         # concatenate the memory and the input
-        x = torch.cat([memory, x], dim=1)
+        x = torch.cat([short_term_memory, x], dim=1)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
 
-        long_q, long_k, long_v = memory.long_term_memory.get_all(B)
+        long_q, long_k, long_v = self.memory.get_long_term_memory(B)
         if long_q is not None:
-            k = torch.cat([long_k, k], dim=1)
-            v = torch.cat([long_v, v], dim=1)
-            q = torch.cat([long_q, q], dim=1)
+            k = torch.cat([long_k.to(x.device), k], dim=1)
+            v = torch.cat([long_v.to(x.device), v], dim=1)
+            q = torch.cat([long_q.to(x.device), q], dim=1)
 
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
+        q = q.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
+        v = v.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
 
         # 在执行点积之前，使用RotaryEmbedding对q和k进行旋转
-        q = self.rotary_emb.rotate_queries_or_keys(q[:, :, -T - self.config.short_term_memory_size:, :])
-        k = self.rotary_emb.rotate_queries_or_keys(k[:, :, -T - self.config.short_term_memory_size:, :])
+        # q = self.rotary_emb.rotate_queries_or_keys(q[:, :, -T - self.config.short_term_memory_size:, :])
+        # k = self.rotary_emb.rotate_queries_or_keys(k[:, :, -T - self.config.short_term_memory_size:, :])
+
+        q, k = apply_rotary_emb(
+            q[:, :, -T - self.config.short_term_memory_size:, :],
+            k[:, :, -T - self.config.short_term_memory_size:, :],
+            freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size].to(x.device),
+        )
+
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -205,7 +213,7 @@ class MemorySelfAttention(nn.Module):
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:, :, :T + self.config.short_term_memory_size, :T + self.config.short_term_memory_size] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -220,7 +228,7 @@ class MemorySelfAttention(nn.Module):
             theta=self.config.rope_theta // self.config.block_size,
         )
         self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-        self.memory.update_long_term_memory(long_q, long_k, long_v, self.freqs_cis_memory)
+        self.memory.update_long_term_memory(long_q, long_k, long_v, freqs_cis_memory)
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens
