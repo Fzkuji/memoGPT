@@ -13,9 +13,11 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from rotary_embedding_torch import RotaryEmbedding
 from torch.nn import functional as F
-from networks import LayerNorm, CausalSelfAttention, MLP, MemorySelfAttention, FeedForward, MoeArgs, MoeLayer
+from .networks import LayerNorm, MLP, MemorySelfAttention, FeedForward, MoeArgs, MoeLayer
+
+
+
 
 
 class Block(nn.Module):
@@ -43,16 +45,25 @@ class Block(nn.Module):
 
 
 @dataclass
-class GPTConfig:
-    memory_size: int = 128
-    block_size: int = 512
+class MemoryConfig:
+    max_batch_size: int = 64
+
+    memory_dim: int = 768
+    short_term_memory_size: int = 32
+    long_term_memory_layer: int = 4
+    long_term_memory_chunk_size: int = 8
+    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * long_term_memory_layer +
+                             [(short_term_memory_size - 1) * long_term_memory_chunk_size])
+
+    rope_theta: float = 500000
+    block_size: int = 4096
     vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     use_moe: bool = False
     n_expert: int = 16
     n_expert_per_tok: int = 4
-    n_embd: int = 768
+    n_embd: int = memory_dim
     dropout: float = 0.0
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
@@ -230,7 +241,7 @@ class GPT(nn.Module):
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args['dropout'] = override_args['dropout']
         # create a from-scratch initialized minGPT model
-        config = GPTConfig(**config_args)
+        config = MemoryConfig(**config_args)
         model = GPT(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
