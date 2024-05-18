@@ -77,7 +77,7 @@ min_lr = 6e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinch
 # DDP settings
 backend = 'nccl'  # 'nccl', 'gloo', etc.
 # system
-device = 'cuda'  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+device = 'mps'  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = False  # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
@@ -156,9 +156,9 @@ if os.path.exists(meta_path):
 
 # model init
 # model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size, bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
-model_args = dict(memory_dim=n_embd, n_layer=n_layer, n_head=n_head,
+model_args = dict(memory_dim=memory_dim, n_layer=n_layer, n_head=n_head,
                   use_moe=use_moe, n_expert=n_expert, n_expert_per_tok=n_expert_per_tok,
-                  block_size=block_size,
+                  block_size=block_size, n_embd=n_embd,
                   bias=bias, vocab_size=None, dropout=dropout)  # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch

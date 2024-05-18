@@ -6,7 +6,7 @@ class MemoryConfig:
     max_batch_size: int = 64
 
     memory_dim: int = 384
-    short_term_memory_size: int = 32
+    short_term_memory_size: int = 4
     long_term_memory_layer: int = 4
     long_term_memory_chunk_size: int = 8
     long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * long_term_memory_layer +

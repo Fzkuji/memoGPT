@@ -20,9 +20,10 @@ dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
 batch_size = 64
 
+memory_size = 4
 block_size = 64  # context of up to 256 previous characters
-train_size = block_size * 8
-val_size = block_size * 512
+train_size = block_size * 16
+val_size = block_size * 16
 # memory_size = 32
 
 # 这个值挺好的
@@ -30,19 +31,19 @@ val_size = block_size * 512
 # block_size = 128  # context of up to 256 previous characters
 
 # baby GPT model :)
-n_layer = 1
+n_layer = 6
 n_head = 6
-use_moe = True
+use_moe = False
 n_expert = 8
 n_expert_per_tok = 3
 memory_dim = 384
 n_embd = memory_dim
 dropout = 0.2
 
-learning_rate = 1e-4  # with baby networks can afford to go a bit higher
+learning_rate = 1e-3  # with baby networks can afford to go a bit higher
 max_iters = 10000
-lr_decay_iters = 5000  # make equal to max_iters usually
-min_lr = 1e-5  # learning_rate / 10 usually
+lr_decay_iters = 2000  # make equal to max_iters usually
+min_lr = 1e-7  # learning_rate / 10 usually
 beta2 = 0.99  # make a bit bigger because number of tokens per iter is small
 
 warmup_iters = 100  # not super necessary potentially

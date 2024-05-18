@@ -106,13 +106,13 @@ class MemoryQueue(nn.Module):
     def update_rotary_emb(self, freqs_cis):
         if self.queue_q is None:
             return
-        k, v = apply_rotary_emb(self.queue_k.transpose(1, 2), self.queue_v.transpose(1, 2), freqs_cis)
-        self.queue_k, self.queue_v = k.transpose(1, 2), v.transpose(1, 2)
+        k, v = apply_rotary_emb(self.queue_k, self.queue_v, freqs_cis[0:self.queue_q.shape[1]])
+        self.queue_k, self.queue_v = k, v
 
     def get_all(self, batch_size=0):
         """ Return a tensor containing all elements in the queue """
         if self.queue_q is None:
-            return None
+            return None, None, None
         else:
             return self.queue_q[:batch_size], self.queue_k[:batch_size], self.queue_v[:batch_size]
 
@@ -120,6 +120,13 @@ class MemoryQueue(nn.Module):
         if self.queue_k is None:
             return 0
         return self.queue_k.shape[1]
+
+    def clear(self):
+        """ Clear the queue """
+        self.queue_q = None
+        self.queue_k = None
+        self.queue_v = None
+        self.index = 0
 
 
 class Memory(nn.Module):
@@ -141,35 +148,6 @@ class Memory(nn.Module):
         # Initialize the short-term memory with MemoryQueue
         self.short_term_memory = MemoryPool(config.short_term_memory_size, config.memory_dim, max_batch_size=config.max_batch_size)
 
-    # def precompute_memory_freqs_cis(self, theta: float = 500000):
-    #     end = self.short_term_memory.capacity
-    #     ranges = {(-end - 1, -1): theta}
-    #
-    #     for memory in self.long_term_memory:
-    #         long_memo_len = memory.get_len()
-    #         theta = theta/self.theta_step
-    #         if long_memo_len == 0:
-    #             continue
-    #         else:
-    #             ranges.update(
-    #                 {
-    #                     (
-    #                         -end - 1 - long_memo_len,
-    #                         -end - 1
-    #                     )
-    #                     : theta
-    #                 }
-    #             )
-    #             end = end + long_memo_len
-    #
-    #     freqs = precompute_memory_freqs_cis(ranges, self.config.memory_dim)
-    #     t = torch.arange(start=-end, end=0, device=freqs.device, dtype=torch.float32)
-    #     freqs = torch.outer(t, freqs)
-    #     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    #     return freqs_cis
-    #
-    # def apply_rotary_emb_2_memory(self, tensor_q, tensor_k, freqs_cis):
-
     def update_long_term_memory(self, tensor_q, tensor_k, tensor_v, freqs_cis):
         for memory in self.long_term_memory:
             memory.update_rotary_emb(freqs_cis)
@@ -178,9 +156,17 @@ class Memory(nn.Module):
                 carry_over = memory.push(tensor_q, tensor_k, tensor_v)
                 if not carry_over:
                     break
+        # detach the memory from the computation graph
+        for memory in self.long_term_memory:
+            if memory.queue_q is not None:
+                memory.queue_q = memory.queue_q.detach()
+                memory.queue_k = memory.queue_k.detach()
+                memory.queue_v = memory.queue_v.detach()
 
     def update_short_term_memory(self, tensor):
         self.short_term_memory.update(tensor)
+        # detach the memory from the computation graph
+        self.short_term_memory.pool = self.short_term_memory.pool.detach()
 
     def get_all(self, batch_size):
         if self.long_term_memory[0].queue_q is None:
@@ -191,10 +177,24 @@ class Memory(nn.Module):
         )
 
     def get_long_term_memory(self, batch_size):
-        if self.long_term_memory[0].queue_q is None:
+        all_q = []
+        all_k = []
+        all_v = []
+
+        for memory in self.long_term_memory[::-1]:
+            q, k, v = memory.get_all(batch_size)
+            if q is not None and k is not None and v is not None:
+                all_q.append(q)
+                all_k.append(k)
+                all_v.append(v)
+
+        if not all_q or not all_k or not all_v:
             return None, None, None
-        return torch.cat(
-            [memory.get_all(batch_size) for memory in self.long_term_memory[::-1]],
-            dim=1,
-        )
+
+        return torch.cat(all_q, dim=1), torch.cat(all_k, dim=1), torch.cat(all_v, dim=1)
+
+    def clear_all(self):
+        for memory in self.long_term_memory:
+            memory.clear()
+        self.short_term_memory.clear()
 

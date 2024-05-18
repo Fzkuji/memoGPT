@@ -29,17 +29,17 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         if config.use_moe:
             self.moe_arg = MoeArgs(num_experts=config.n_expert, num_experts_per_tok=config.n_expert_per_tok)
-            self.feed_forward = MoeLayer(
+            self.mlp = MoeLayer(
                 experts=[FeedForward(config=config) for _ in range(config.n_expert)],
                 gate=nn.Linear(config.n_embd, config.n_expert, bias=False),
                 moe_args=self.moe_arg,
             )
         else:
-            self.feed_forward = MLP(config)
+            self.mlp = MLP(config)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.feed_forward(self.ln_2(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
@@ -53,7 +53,7 @@ class GPT(nn.Module):
         # print("configs.vocab_size: ", configs.vocab_size)
         self.transformer = nn.ModuleDict(dict(
             wte=nn.Embedding(config.vocab_size, config.n_embd),
-            # wpe=nn.Embedding(configs.block_size, configs.n_embd),
+            wpe=nn.Embedding(config.block_size, config.n_embd),
             drop=nn.Dropout(config.dropout),
             h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f=LayerNorm(config.n_embd, bias=config.bias),
@@ -68,9 +68,9 @@ class GPT(nn.Module):
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight  # https://paperswithcode.com/method/weight-tying
 
-        self.memory = None  # Initialize memory as None
-        self.memory_len = 0
-        self.max_memory_len = 4
+        # self.memory = None  # Initialize memory as None
+        # self.memory_len = 0
+        # self.max_memory_len = 4
 
         # init all weights
         self.apply(self._init_weights)
@@ -157,7 +157,6 @@ class GPT(nn.Module):
             x = tok_emb_section
             for block in self.transformer.h:
                 x = block(x)
-                # self.memory[i + 1] = intermediate[:, :self.config.memory_size, :]
             xs.append(x)
 
         x = torch.cat(xs, dim=1)
@@ -168,11 +167,11 @@ class GPT(nn.Module):
             logits = self.lm_head(x)[:, -t:, :-1]
             # print("logits: ", logits.size())
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            self.memory = None
+            for block in self.transformer.h:
+                block.attn.memory.clear_all()
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])[:, :,
-                     :self.config.vocab_size - 1]  # note: using list [-1] to preserve the time dim
+            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size - 1]  # note: using list [-1] to preserve the time dim
             # print("logits: ", logits.size())
             loss = None
 
@@ -216,6 +215,7 @@ class GPT(nn.Module):
         # create a from-scratch initialized minGPT model
         config = MemoryConfig(**config_args)
         model = GPT(config)
+        print(model)
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]  # discard this mask / buffer, not a param

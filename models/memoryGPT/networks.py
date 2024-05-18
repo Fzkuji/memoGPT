@@ -31,59 +31,6 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
-class CausalSelfAttention(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1,
-                                                                                                           config.block_size,
-                                                                                                           config.block_size))
-
-    def forward(self, x):
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
-
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None,
-                                                                 dropout_p=self.dropout if self.training else 0,
-                                                                 is_causal=True)
-        else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
-
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
-        return y
-
-
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -101,20 +48,12 @@ class MLP(nn.Module):
         return x
 
 
-def create_memory_mask(memory_size, block_size):
-    mask_size = memory_size + block_size
-
-    # Step 1: 创建一个全零的方阵tensor
-    mask = torch.zeros(mask_size, mask_size)
-
-    # Step 2: 设置前start_tokens行和列的值为1
-    mask[:memory_size, :] = 1  # 设置前start_tokens行为1
-    mask[:, :memory_size] = 1  # 设置前start_tokens列为1
-
-    # Step 3: 设置对角线及其下方recent_size个元素的值为1
-    for i in range(mask_size):
-        mask[i, max(0, i - block_size + 1):i + 1] = 1
-
+def create_memory_mask(long_term_memory_size, short_term_memory_size, block_size):
+    mask_size = long_term_memory_size + short_term_memory_size + block_size
+    # Create a mask that is 1 in the lower left triangle and 0 in the upper right triangle
+    mask = torch.tril(torch.ones(mask_size, mask_size))
+    # Set the memory to 1
+    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :] = 1
     return mask.view(1, 1, mask_size, mask_size)
 
 
@@ -142,8 +81,23 @@ class MemorySelfAttention(nn.Module):
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", create_memory_mask(config.block_size, config.block_size))
-            # print(self.bias)
+            self.register_buffer(
+                "bias",
+                create_memory_mask(
+                    sum(config.long_term_memory_size),
+                    config.short_term_memory_size,
+                    config.block_size)
+            )
+            self.l_m_size = sum(config.long_term_memory_size)
+            self.s_m_size = config.short_term_memory_size
+
+        # 实例化RotaryEmbedding
+        self.freqs_cis_memory = precompute_freqs_cis(
+            dim=self.config.n_embd // self.config.n_head,
+            fix_t=config.block_size,
+            end=config.block_size * 2,
+            theta=self.config.rope_theta,
+        )
 
         # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(
@@ -152,25 +106,7 @@ class MemorySelfAttention(nn.Module):
             theta=config.rope_theta,
         )
 
-        # self.cache_k = torch.zeros(
-        #     (
-        #         config.max_batch_size,
-        #         config.block_size,
-        #         self.n_local_kv_heads,
-        #         self.head_dim,
-        #     )
-        # ).cuda()
-        # self.cache_v = torch.zeros(
-        #     (
-        #         config.max_batch_size,
-        #         config.block_size,
-        #         self.n_local_kv_heads,
-        #         self.head_dim,
-        #     )
-        # ).cuda()
-
     def forward(self, x):
-
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         short_term_memory = self.memory.short_term_memory.get_all(B).to(x.device)
@@ -181,27 +117,33 @@ class MemorySelfAttention(nn.Module):
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
 
+        k = k.view(B, -1, self.n_head, C // self.n_head)  # (B, T, nh, hs)
+        q = q.view(B, -1, self.n_head, C // self.n_head)  # (B, T, nh, hs)
+        v = v.view(B, -1, self.n_head, C // self.n_head)  # (B, T, nh, hs)
+
         long_q, long_k, long_v = self.memory.get_long_term_memory(B)
         if long_q is not None:
             k = torch.cat([long_k.to(x.device), k], dim=1)
             v = torch.cat([long_v.to(x.device), v], dim=1)
             q = torch.cat([long_q.to(x.device), q], dim=1)
+            start_pos = long_q.shape[1]
+        else:
+            start_pos = 0
 
-        k = k.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
-        q = q.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
-        v = v.view(B, -1, self.n_head, C // self.n_head)  # (B, nh, T, hs)
+        self.memory.update_long_term_memory(
+            q[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # q
+            k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
+            v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
+            self.freqs_cis_memory.to(x.device),
+        )
 
-        # 在执行点积之前，使用RotaryEmbedding对q和k进行旋转
-        # q = self.rotary_emb.rotate_queries_or_keys(q[:, :, -T - self.config.short_term_memory_size:, :])
-        # k = self.rotary_emb.rotate_queries_or_keys(k[:, :, -T - self.config.short_term_memory_size:, :])
-
-        q, k = apply_rotary_emb(
-            q[:, :, -T - self.config.short_term_memory_size:, :],
-            k[:, :, -T - self.config.short_term_memory_size:, :],
+        apply_rotary_emb(
+            q[:, -T - self.config.short_term_memory_size:, :, :],
+            k[:, -T - self.config.short_term_memory_size:, :, :],
             freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size].to(x.device),
         )
 
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -212,23 +154,16 @@ class MemorySelfAttention(nn.Module):
             #                                                      is_causal=True)
         else:
             # manual implementation of attention
+            end_pos = self.l_m_size + self.s_m_size + T
+            start_pos = end_pos - q.shape[2]
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:, :, :T + self.config.short_term_memory_size, :T + self.config.short_term_memory_size] == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:, :, start_pos:end_pos, start_pos:end_pos] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-        # 实例化RotaryEmbedding
-        freqs_cis_memory = precompute_freqs_cis(
-            dim=self.config.n_embd // self.config.n_head,
-            fix_t=-T,
-            start=-self.config.block_size * 2,
-            end=0,
-            theta=self.config.rope_theta // self.config.block_size,
-        )
         self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-        self.memory.update_long_term_memory(long_q, long_k, long_v, freqs_cis_memory)
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens
