@@ -79,7 +79,7 @@ class MemorySelfAttention(nn.Module):
         # self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         self.flash = False
         if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            # print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer(
                 "bias",
@@ -88,8 +88,6 @@ class MemorySelfAttention(nn.Module):
                     config.short_term_memory_size,
                     config.block_size)
             )
-            self.l_m_size = sum(config.long_term_memory_size)
-            self.s_m_size = config.short_term_memory_size
 
         # 实例化RotaryEmbedding
         self.freqs_cis_memory = precompute_freqs_cis(
@@ -108,6 +106,7 @@ class MemorySelfAttention(nn.Module):
 
     def forward(self, x):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        end_pos = self.memory.max_len + T
 
         short_term_memory = self.memory.short_term_memory.get_all(B).to(x.device)
 
@@ -154,7 +153,6 @@ class MemorySelfAttention(nn.Module):
             #                                                      is_causal=True)
         else:
             # manual implementation of attention
-            end_pos = self.l_m_size + self.s_m_size + T
             start_pos = end_pos - q.shape[2]
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:, :, start_pos:end_pos, start_pos:end_pos] == 0, float('-inf'))

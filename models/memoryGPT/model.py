@@ -126,29 +126,9 @@ class GPT(nn.Module):
         return sections
 
     def forward(self, idx, targets=None):
-        b, t = idx.size()
-
-        # assert t <= self.configs.max_size, f"Cannot forward sequence of length {t}, max size is only {self.configs.max_size}"
-        # pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
-
-        # # Detach memory before using it
-        # if self.memory is not None:
-        #     self.memory = [m.detach() for m in self.memory]  # Detach each tensor in memory
-        #
-        # # Check if memory is None or not the expected shape, then initialize
-        # if self.memory is None or self.memory[0].size(0) != b:
-        #     memory_seq = torch.full((b, self.config.memory_size), fill_value=self.config.vocab_size - 1,
-        #                             device=idx.device)
-        #     self.memory = [None for _ in range(self.config.n_layer + 1)]
-        #     self.memory[0] = self.transformer.drop(
-        #         self.transformer.wte(memory_seq))  # token embeddings of shape (b, t, n_embd)
-
-        # 输出idx最大的值
-        # print("idx max: ", idx.max())
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        # tok_emb = self.transformer.drop(tok_emb)
 
         tok_emb_sections = self.split_sequence(tok_emb, self.config.block_size)
 
@@ -164,15 +144,13 @@ class GPT(nn.Module):
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)[:, -t:, :-1]
-            # print("logits: ", logits.size())
+            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             for block in self.transformer.h:
                 block.attn.memory.clear_all()
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size - 1]  # note: using list [-1] to preserve the time dim
-            # print("logits: ", logits.size())
+            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]  # note: using list [-1] to preserve the time dim
             loss = None
 
         return logits, loss
@@ -215,13 +193,14 @@ class GPT(nn.Module):
         # create a from-scratch initialized minGPT model
         config = MemoryConfig(**config_args)
         model = GPT(config)
-        print(model)
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]  # discard this mask / buffer, not a param
 
         # init a huggingface/transformers model
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        model_hf = GPT2LMHeadModel.from_pretrained(
+            model_type,
+        )
         sd_hf = model_hf.state_dict()
 
         # copy while ensuring all of the parameters are aligned and match in names and shapes
@@ -284,7 +263,7 @@ class GPT(nn.Module):
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0 / dt)  # per second
-        flops_promised = 312e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        flops_promised = 119e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
 

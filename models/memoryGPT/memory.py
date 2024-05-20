@@ -24,6 +24,9 @@ class MemoryPool(nn.Module):
         return self.pool[:batch_size]
         # return self.pool_q[:batch_size], self.pool_k[:batch_size], self.pool_v[:batch_size]
 
+    def get_len(self):
+        return self.pool.shape[1]
+
     # def update(self, tensor_q, tensor_k, tensor_v):
     def update(self, tensor):
         """ Update the pool with a new tensor """
@@ -133,6 +136,7 @@ class Memory(nn.Module):
     def __init__(self, config: MemoryConfig):
         super(Memory, self).__init__()
         self.config = config
+        self.max_len = sum(config.long_term_memory_size) + config.short_term_memory_size
 
         # assert config.long_term_memory_size[0] % config.short_term_memory_size == 0, "Long-term memory size should be a multiple of short-term memory size"
         self.theta_step = config.long_term_memory_size[0] // config.short_term_memory_size
@@ -192,6 +196,11 @@ class Memory(nn.Module):
             return None, None, None
 
         return torch.cat(all_q, dim=1), torch.cat(all_k, dim=1), torch.cat(all_v, dim=1)
+
+    def get_len(self):
+        short_term_len = self.short_term_memory.get_len()
+        long_term_len = sum([memory.get_len() for memory in self.long_term_memory])
+        return short_term_len + long_term_len
 
     def clear_all(self):
         for memory in self.long_term_memory:

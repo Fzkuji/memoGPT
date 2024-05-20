@@ -5,13 +5,12 @@ from dataclasses import dataclass
 class MemoryConfig:
     max_batch_size: int = 64
 
-    memory_dim: int = 384
-    short_term_memory_size: int = 4
+    memory_dim: int = 768
+    short_term_memory_size: int = 16
     long_term_memory_layer: int = 4
     long_term_memory_chunk_size: int = 8
-    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * long_term_memory_layer +
-                             [(short_term_memory_size - 1) * long_term_memory_chunk_size])
-
+    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
+                             [short_term_memory_size * (long_term_memory_chunk_size - 1)])
     rope_theta: float = 500000
     block_size: int = 4096
     vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
