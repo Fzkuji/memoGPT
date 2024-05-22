@@ -1,14 +1,15 @@
 import time
 
-out_dir = 'out-shakespeare'
-eval_interval = 5
-eval_iters = 40
+out_dir = 'out-owt'
+eval_interval = 1000
+eval_iters = 200
+log_interval = 10
 wandb_log = False  # feel free to turn on
 wandb_project = 'owt'
 wandb_run_name = 'ft-' + str(time.time())
 
 dataset = 'openwebtext'
-init_from = 'scratch'  # this is the largest GPT-2 model
+init_from = 'gpt2-xl'  # this is the largest GPT-2 model
 
 # only save checkpoints if the validation loss improves
 always_save_checkpoint = False
@@ -16,17 +17,22 @@ always_save_checkpoint = False
 # the number of examples per iter:
 # 1 batch_size * 32 grad_accum * 1024 tokens = 32,768 tokens/iter
 # shakespeare has 301,966 tokens, so 1 epoch ~= 9.2 iters
-batch_size = 3
+batch_size = 1
 gradient_accumulation_steps = 1
-max_iters = 20
+max_iters = 600000
+lr_decay_iters = 600000
 
-memory_dim = 768
-n_embd = 768
-short_term_memory_size = 16
+memory_dim = 2048
+n_embd = 2048
+short_term_memory_size = 8
 
-block_size = 512  # context of up to 256 previous characters
-train_size = block_size * 16
-val_size = block_size * 16
+bias = True  # do we use bias inside LayerNorm and Linear layers?
+
+block_size = 1024
+train_size_ratio = 32
+val_size_ratio = 128
+train_size = block_size * train_size_ratio
+val_size = block_size * val_size_ratio
 
 # finetune at constant LR
 learning_rate = 3e-5

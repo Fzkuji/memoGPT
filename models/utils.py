@@ -1,6 +1,22 @@
 from typing import Tuple
 
+import math
 import torch
+
+
+# learning rate decay scheduler (cosine with warmup)
+def get_lr(it, warmup_iters, lr_decay_iters, learning_rate, min_lr=1e-5):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return learning_rate * it / warmup_iters
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+    return min_lr + coeff * (learning_rate - min_lr)
 
 
 # def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -9,6 +25,8 @@ import torch
 #     freqs = torch.outer(t, freqs)
 #     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
 #     return freqs_cis
+
+
 def precompute_freqs_cis(dim: int, fix_t: int = None, start: int = 0, end: int = 4096, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     if fix_t is not None:
@@ -41,6 +59,39 @@ def apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
+def apply_rotary_emb_inplace(
+        xq: torch.Tensor,
+        xk: torch.Tensor,
+        freqs_cis: torch.Tensor
+) -> None:
+    """
+    Apply rotary embeddings in-place on the input tensors.
+
+    Args:
+        xq (torch.Tensor): Input tensor for queries of shape (..., length, n_embd).
+        xk (torch.Tensor): Input tensor for keys of shape (..., length, n_embd).
+        freqs_cis (torch.Tensor): Precomputed rotary embeddings.
+    """
+    # Ensure the input tensors are of float type for complex operations
+    xq_float = xq.float()
+    xk_float = xk.float()
+
+    # Convert input tensors to complex
+    xq_complex = torch.view_as_complex(xq_float.reshape(*xq.shape[:-1], -1, 2))
+    xk_complex = torch.view_as_complex(xk_float.reshape(*xk.shape[:-1], -1, 2))
+
+    # Broadcast freqs_cis to match the shape of the input tensors
+    freqs_cis_broadcasted = reshape_for_broadcast(freqs_cis, xq_complex)
+
+    # Apply rotary embedding in-place
+    xq_rotated = torch.view_as_real(xq_complex * freqs_cis_broadcasted).flatten(3)
+    xk_rotated = torch.view_as_real(xk_complex * freqs_cis_broadcasted).flatten(3)
+
+    # Copy the result back to the original input tensors to avoid extra memory usage
+    xq.copy_(xq_rotated.type_as(xq))
+    xk.copy_(xk_rotated.type_as(xk))
+
+
 def precompute_memory_freqs_cis(ranges: dict, dim: int):
     """
     Precompute the frequency tensors for the positional encoding
@@ -64,5 +115,13 @@ def precompute_memory_freqs_cis(ranges: dict, dim: int):
     # Concatenate the frequency tensors along the time dimension
     freqs_concatenated = torch.cat(freqs_list, dim=0)
     return freqs_concatenated
+
+def create_memory_mask(long_term_memory_size, short_term_memory_size, block_size):
+    mask_size = long_term_memory_size + short_term_memory_size + block_size
+    # Create a mask that is 1 in the lower left triangle and 0 in the upper right triangle
+    mask = torch.tril(torch.ones(mask_size, mask_size))
+    # Set the memory to 1
+    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :] = 1
+    return mask.view(1, 1, mask_size, mask_size)
 
 

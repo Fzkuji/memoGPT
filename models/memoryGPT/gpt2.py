@@ -9,14 +9,14 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from . import MemoryConfig
-from .networks import LayerNorm, MLP, MemorySelfAttention, FeedForward, MoeArgs, MoeLayer
+from . import GPTConfig
+from models.networks import LayerNorm, MLP, FeedForward, MoeArgs, MoeLayer
+from models.attentions.MemorySelfAttention import MemorySelfAttention
 
 
 class Block(nn.Module):
@@ -132,28 +132,62 @@ class GPT(nn.Module):
 
         tok_emb_sections = self.split_sequence(tok_emb, self.config.block_size)
 
-        xs = []
-        for tok_emb_section in tok_emb_sections:
-            x = tok_emb_section
-            for block in self.transformer.h:
-                x = block(x)
-            xs.append(x)
+        # 预先分配一个大的张量
+        b, t, n_embd = tok_emb.size()
+        x = torch.empty(b, t, n_embd, device=tok_emb.device, dtype=tok_emb.dtype)
 
-        x = torch.cat(xs, dim=1)
+        current_pos = 0
+        losses = []
+        for tok_emb_section in tok_emb_sections:
+            section_len = tok_emb_section.size(1)
+            for block in self.transformer.h:
+                tok_emb_section = block(tok_emb_section)
+            x[:, current_pos:current_pos + section_len, :] = tok_emb_section
+
+            # 在每个小块处理完后计算 logits 和 loss
+            if targets is not None:
+                logits_chunk = self.lm_head(tok_emb_section)
+                loss_chunk = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
+                losses.append(loss_chunk)
+                torch.cuda.empty_cache()  # 清除未使用的缓存内存
+
+            current_pos += section_len
+
         x = self.transformer.ln_f(x)
 
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            logits = self.lm_head(x)  # 计算最终的 logits
+            loss = torch.stack(losses).mean()  # 计算平均损失
             for block in self.transformer.h:
                 block.attn.memory.clear_all()
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]  # note: using list [-1] to preserve the time dim
+            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]
             loss = None
 
         return logits, loss
+
+        # current_pos = 0
+        # for tok_emb_section in tok_emb_sections:
+        #     section_len = tok_emb_section.size(1)
+        #     for block in self.transformer.h:
+        #         tok_emb_section = block(tok_emb_section)
+        #     x[:, current_pos:current_pos + section_len, :] = tok_emb_section
+        #     current_pos += section_len
+        #
+        # x = self.transformer.ln_f(x)
+        #
+        # if targets is not None:
+        #     # if we are given some desired targets also calculate the loss
+        #     logits = self.lm_head(x)
+        #     loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        #     for block in self.transformer.h:
+        #         block.attn.memory.clear_all()
+        # else:
+        #     # inference-time mini-optimization: only forward the lm_head on the very last position
+        #     logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]  # note: using list [-1] to preserve the time dim
+        #     loss = None
+        #
+        # return logits, loss
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -191,7 +225,7 @@ class GPT(nn.Module):
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args['dropout'] = override_args['dropout']
         # create a from-scratch initialized minGPT model
-        config = MemoryConfig(**config_args)
+        config = GPTConfig(**config_args)
         model = GPT(config)
         sd = model.state_dict()
         sd_keys = sd.keys()

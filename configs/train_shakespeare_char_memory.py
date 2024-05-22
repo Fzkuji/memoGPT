@@ -21,9 +21,9 @@ gradient_accumulation_steps = 1
 batch_size = 64
 
 memory_size = 4
-block_size = 64  # context of up to 256 previous characters
-train_size = block_size * 16
-val_size = block_size * 16
+block_size = 256  # context of up to 256 previous characters
+train_size = block_size * 1
+val_size = block_size * 1
 # memory_size = 32
 
 # 这个值挺好的
