@@ -125,69 +125,82 @@ class GPT(nn.Module):
 
         return sections
 
-    def forward(self, idx, targets=None):
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+    def forward(self, idx, targets=None, index=None):
+        tok_emb = self.transformer.wte(idx)
+        del idx  # 删除不再使用的变量
+        torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
         tok_emb_sections = self.split_sequence(tok_emb, self.config.block_size)
+        section_len = tok_emb_sections[0].size(1)
+        del tok_emb  # 删除不再使用的变量
+        torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-        # 预先分配一个大的张量
-        b, t, n_embd = tok_emb.size()
-        x = torch.empty(b, t, n_embd, device=tok_emb.device, dtype=tok_emb.dtype)
-
-        current_pos = 0
         losses = []
-        for tok_emb_section in tok_emb_sections:
-            section_len = tok_emb_section.size(1)
+        current_pos = 0
+        logits_chunk = None
+
+        if index is not None:  # 如果index不为None，则只计算指定index段的的损失和预测
+
+            # 输入index段之前的内容，初始化memory
+            current_index = 0
+            with torch.no_grad():
+                for tok_emb_section in tok_emb_sections:
+                    if current_index == index:
+                        break
+                    for block in self.transformer.h:
+                        tok_emb_section = block(tok_emb_section)
+
+                    del tok_emb_section  # 删除不再使用的变量
+                    torch.cuda.empty_cache()
+
+                    current_pos += section_len
+                    current_index += 1
+
+            # 计算指定index段
+            tok_emb_section = tok_emb_sections[index]
             for block in self.transformer.h:
                 tok_emb_section = block(tok_emb_section)
-            x[:, current_pos:current_pos + section_len, :] = tok_emb_section
 
-            # 在每个小块处理完后计算 logits 和 loss
-            if targets is not None:
-                logits_chunk = self.lm_head(tok_emb_section)
-                loss_chunk = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
-                losses.append(loss_chunk)
-                torch.cuda.empty_cache()  # 清除未使用的缓存内存
+            logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
+            del tok_emb_section  # 删除不再使用的变量
+            torch.cuda.empty_cache()
 
-            current_pos += section_len
+            # 计算 loss
+            loss = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
 
-        x = self.transformer.ln_f(x)
-
-        if targets is not None:
-            logits = self.lm_head(x)  # 计算最终的 logits
-            loss = torch.stack(losses).mean()  # 计算平均损失
+            # 清除memory
             for block in self.transformer.h:
                 block.attn.memory.clear_all()
-        else:
-            logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]
-            loss = None
 
-        return logits, loss
+            # 使用index仅限于训练，因此不需要保存logits
+            return None, loss
 
-        # current_pos = 0
-        # for tok_emb_section in tok_emb_sections:
-        #     section_len = tok_emb_section.size(1)
-        #     for block in self.transformer.h:
-        #         tok_emb_section = block(tok_emb_section)
-        #     x[:, current_pos:current_pos + section_len, :] = tok_emb_section
-        #     current_pos += section_len
-        #
-        # x = self.transformer.ln_f(x)
-        #
-        # if targets is not None:
-        #     # if we are given some desired targets also calculate the loss
-        #     logits = self.lm_head(x)
-        #     loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        #     for block in self.transformer.h:
-        #         block.attn.memory.clear_all()
-        # else:
-        #     # inference-time mini-optimization: only forward the lm_head on the very last position
-        #     logits = self.lm_head(x[:, [-1], :])[:, :, :self.config.vocab_size]  # note: using list [-1] to preserve the time dim
-        #     loss = None
-        #
-        # return logits, loss
+        else:  # 如果index为None，则计算整个Input的损失和预测
+            for tok_emb_section in tok_emb_sections:
+                section_len = tok_emb_section.size(1)
+                for block in self.transformer.h:
+                    tok_emb_section = block(tok_emb_section)
+
+                logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
+                del tok_emb_section,   # 删除不再使用的变量
+                torch.cuda.empty_cache()  # 清除未使用的缓存内存
+
+                # 计算 loss
+                if targets is not None:
+                    loss_chunk = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
+                    losses.append(loss_chunk)
+
+                current_pos += section_len
+
+            for block in self.transformer.h:
+                block.attn.memory.clear_all()
+
+            if targets is not None:
+                loss = torch.stack(losses).mean()  # 计算平均损失
+                return None, loss
+            else:
+                logits = logits_chunk[:, [-1], :]  # 只保留最后一个时间步的 logits
+                return logits, None
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

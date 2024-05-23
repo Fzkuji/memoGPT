@@ -9,7 +9,7 @@ from dataloader import get_batch
 def estimate_loss(config, model, ctx, device, device_type):
     out = {}
     model.eval()
-    for split in ['val']:
+    for split in ['train', 'val']:
         losses = torch.zeros(config['eval_iters'])
         for k in tqdm(range(config['eval_iters']), desc=f"Evaluating {split} loss"):
             X, Y = get_batch(config, split, context_len=config['train_size'] if split == 'train' else config['val_size'], device=device, device_type=device_type)
@@ -17,7 +17,7 @@ def estimate_loss(config, model, ctx, device, device_type):
                 # Calculate the time it takes to evaluate the loss
                 import time
                 start = time.time()
-                logits, loss = model(X, Y)
+                _, loss = model(X, Y)
                 print(f"Time taken to evaluate loss: {time.time() - start}")
             losses[k] = loss.item()
         out[split] = losses.mean()
