@@ -18,7 +18,7 @@ always_save_checkpoint = False
 # 1 batch_size * 32 grad_accum * 1024 tokens = 32,768 tokens/iter
 # shakespeare has 301,966 tokens, so 1 epoch ~= 9.2 iters
 batch_size = 1
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 16
 max_iters = 600000
 lr_decay_iters = 600000
 
@@ -29,7 +29,7 @@ short_term_memory_size = 8
 bias = True  # do we use bias inside LayerNorm and Linear layers?
 
 block_size = 1024
-train_size_ratio = 16  # 32
+train_size_ratio = 32  # 32
 val_size_ratio = 1024  # need 22GB per 1024 * 1024 tokens long context
 train_size = block_size * train_size_ratio
 val_size = block_size * val_size_ratio

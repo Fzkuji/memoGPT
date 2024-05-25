@@ -68,10 +68,6 @@ class GPT(nn.Module):
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight  # https://paperswithcode.com/method/weight-tying
 
-        # self.memory = None  # Initialize memory as None
-        # self.memory_len = 0
-        # self.max_memory_len = 4
-
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
@@ -315,28 +311,71 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, max_new_tokens, eos_token_id, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        the sequence indefinitely, feeding the predictions back into the model each time.
+        The input sequence is divided into blocks of size block_size and memory is updated accordingly.
+        Stop generating if the eos_token_id is generated.
         """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            # forward the model to get the logits for the index in the sequence
+        B, T = idx.size()
+        block_size = self.config.block_size
+
+        # Initialize memory by processing the initial blocks except the last one
+        current_pos = 0
+        while current_pos + block_size < T:
+            idx_cond = idx[:, current_pos:current_pos + block_size]
             logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
+            current_pos += block_size
+
+        # Process the last block with special strategy
+        index = min(current_pos, T - block_size)
+        index = max(0, index)
+        idx_cond = idx[:, index:]
+        m = idx_cond.size(1)
+        index = m-1
+        gen_len = 0
+
+        while True:
+            # Generate one token at a time until the length exceeds block size
+            if index >= block_size:
+                index = index - block_size
+                idx_cond = idx_cond[:, -(block_size - 1):]  # Keep the last block_size - 1 tokens
+
+            # Forward the model to get the logits for the last index in the sequence
+            logits, _ = self(idx_cond)
             logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
+
+            # Optionally crop the logits to only the top k options
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
+
+            # Apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
+
+            # Sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
+
+            # Append sampled index to the running sequence
+            idx_cond = torch.cat((idx_cond, idx_next), dim=1)
+            if idx_cond.size(1) > block_size:
+                idx_cond = idx_cond[:, 1:]
+            index += 1
+
+            # # Print the generated token for demonstration purposes
+            # print(idx_next.item())
+
+            # If the generated token is the eos_token_id, stop generating
+            if idx_next.item() == eos_token_id:
+                break
+
+            # Keep generating tokens indefinitely
             idx = torch.cat((idx, idx_next), dim=1)
 
+            gen_len += 1
+
+            if gen_len >= max_new_tokens:
+                break
         return idx
+

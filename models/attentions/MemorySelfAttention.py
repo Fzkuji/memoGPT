@@ -12,6 +12,7 @@ class MemorySelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.short_term_memory_updated = False
         self.config = config
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
@@ -75,12 +76,13 @@ class MemorySelfAttention(nn.Module):
         v = torch.cat(long_v, dim=1)
         q = torch.cat(long_q, dim=1)
 
-        self.memory.update_long_term_memory(
-            q[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # q
-            k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
-            v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
-            self.freqs_cis_memory,
-        )
+        if self.short_term_memory_updated:
+            self.memory.update_long_term_memory(
+                q[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # q
+                k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
+                v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
+                self.freqs_cis_memory,
+            )
 
         apply_rotary_emb(
             q[:, -T - self.config.short_term_memory_size:, :, :],
@@ -100,7 +102,9 @@ class MemorySelfAttention(nn.Module):
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-        self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
+        if T == self.config.block_size:
+            self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
+            self.short_term_memory_updated = True
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens

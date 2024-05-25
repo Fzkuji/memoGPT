@@ -12,13 +12,19 @@ def estimate_loss(config, model, ctx, device, device_type):
     for split in ['train', 'val']:
         losses = torch.zeros(config['eval_iters'])
         for k in tqdm(range(config['eval_iters']), desc=f"Evaluating {split} loss"):
-            X, Y = get_batch(config, split, context_len=config['train_size'] if split == 'train' else config['val_size'], device=device, device_type=device_type)
+            input_x, label_y = get_batch(
+                config,
+                split,
+                context_len=config['train_size'] if split == 'train' else config['val_size'],
+                device=device,
+                device_type=device_type,
+            )
             with ctx:
-                # Calculate the time it takes to evaluate the loss
-                import time
-                start = time.time()
-                _, loss = model(X, Y)
-                print(f"Time taken to evaluate loss: {time.time() - start}")
+                # # Calculate the time it takes to evaluate the loss
+                # import time
+                # start = time.time()
+                _, loss = model(input_x, label_y)
+                # print(f"Time taken to evaluate loss: {time.time() - start}")
             losses[k] = loss.item()
         out[split] = losses.mean()
         # 计算困惑度
