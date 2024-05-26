@@ -298,10 +298,10 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            # 生成一个0-train_size_ratio的随机整数
-            index = torch.randint(0, train_size_ratio, (1,)).item()
+            # 生成一个0-train_size_ratio的整数
+            # index = torch.randint(0, train_size_ratio, (1,))
 
-            _, loss = model(X, Y, index)
+            _, loss = model(X, Y, index=None)
             loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch(config, 'train', train_size, device, device_type)
