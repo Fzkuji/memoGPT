@@ -19,6 +19,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 import os
 import time
 import pickle
+import math
 from contextlib import nullcontext
 
 import torch
@@ -260,7 +261,7 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss(config, model, ctx, device, device_type)
+        losses = estimate_loss(config, model, ctx, device, device_type, iter_num)
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
         if wandb_log:
             wandb.log({
@@ -304,7 +305,8 @@ while True:
             _, loss = model(X, Y, index=None)
             loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch(config, 'train', train_size, device, device_type)
+        ratio = 1.25 ** math.log(iter_num + 1)  # grow the ratio exponentially
+        X, Y = get_batch(config, 'train', int(train_size * ratio), device, device_type)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient

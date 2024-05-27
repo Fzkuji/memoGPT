@@ -265,7 +265,7 @@ class GPT(nn.Module):
                 assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
-
+        model.config.block_size = 256  # force block size to 256
         return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):

@@ -83,6 +83,7 @@ class MemorySelfAttention(nn.Module):
                 v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
                 self.freqs_cis_memory,
             )
+            # print("Updated long term memory")
 
         apply_rotary_emb(
             q[:, -T - self.config.short_term_memory_size:, :, :],
@@ -105,6 +106,7 @@ class MemorySelfAttention(nn.Module):
         if T == self.config.block_size:
             self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
             self.short_term_memory_updated = True
+            # print("Updated short term memory")
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens
