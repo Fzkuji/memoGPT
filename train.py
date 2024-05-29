@@ -162,8 +162,7 @@ model_args = dict(short_term_memory_size=short_term_memory_size,
                   n_layer=n_layer, n_head=n_head, block_size=block_size,
                   use_moe=use_moe, n_expert=n_expert, n_expert_per_tok=n_expert_per_tok,
                   n_embd=n_embd, bias=bias,
-                  vocab_size=vocab_size, dropout=dropout,
-                  train_size=train_size, val_size=val_size)  # start with model_args from command line
+                  vocab_size=vocab_size, dropout=dropout)  # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -273,7 +272,7 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu * 100,  # convert to percentage
             })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
+        if losses['val'] < best_val_loss:
             best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint = {
@@ -286,6 +285,19 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+        if always_save_checkpoint:
+            best_val_loss = losses['val']
+            if iter_num > 0:
+                checkpoint = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'model_args': model_args,
+                    'iter_num': iter_num,
+                    'best_val_loss': best_val_loss,
+                    'configs': config,
+                }
+                print(f"saving checkpoint to {out_dir}")
+                torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}.pt'))
     if iter_num == 0 and eval_only:
         break
 
@@ -305,7 +317,9 @@ while True:
             _, loss = model(X, Y, index=None)
             loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        ratio = 1.25 ** math.log(iter_num + 1)  # grow the ratio exponentially
+        # ratio = 1.25 ** math.log(iter_num + 1)  # grow the ratio exponentially
+        # ratio = min(iter_num/5000 + 1, 2)
+        ratio = 1
         X, Y = get_batch(config, 'train', int(train_size * ratio), device, device_type)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()

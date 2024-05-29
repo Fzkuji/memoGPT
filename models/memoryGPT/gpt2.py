@@ -136,6 +136,9 @@ class GPT(nn.Module):
         logits_chunk = None
 
         if index is not None:  # 如果index不为None，则只计算指定index段的的损失和预测
+            if index == -1:
+                index = len(tok_emb_sections) + index
+            assert 0 <= index < len(tok_emb_sections)
 
             # 输入index段之前的内容，初始化memory
             current_index = 0
@@ -265,7 +268,6 @@ class GPT(nn.Module):
                 assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
-        model.config.block_size = 256  # force block size to 256
         return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):

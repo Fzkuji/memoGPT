@@ -6,14 +6,15 @@ class GPTConfig:
     max_batch_size: int = 64
 
     short_term_memory_size: int = 16
-    long_term_memory_layer: int = 4
-    long_term_memory_chunk_size: int = 16
+    long_term_memory_layer: int = 16
+    long_term_memory_chunk_size: int = 4
     long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
                              [short_term_memory_size * (long_term_memory_chunk_size - 1)])
 
     rope_theta: float = 500000
 
-    block_size: int = 768
+    block_size: int = 1024
+    input_block_size: int = 256
     train_size_ratio = 2
     val_size_ratio = 2
 

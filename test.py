@@ -1,8 +1,9 @@
 import math
 
-iter_num = 10000
+iter_num = 5000
 
-ratio = 1.25 ** math.log(iter_num + 1)
+# ratio = 1.2 ** math.log(iter_num + 1)
+ratio = iter_num/2500
 
 print(ratio)
 

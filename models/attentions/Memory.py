@@ -89,8 +89,8 @@ class MemoryQueue(nn.Module):
             self.queue_q.pop(0)
             self.queue_k.pop(0)
             self.queue_v.pop(0)
+            self.index += 1
 
-        self.index += 1
         if self.index > self.capacity:
             self.index = self.index - self.capacity
             return True  # Carry over

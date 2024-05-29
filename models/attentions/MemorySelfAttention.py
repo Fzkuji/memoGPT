@@ -37,10 +37,11 @@ class MemorySelfAttention(nn.Module):
         # 实例化RotaryEmbedding
         self.freqs_cis_memory = precompute_freqs_cis(
             dim=self.config.n_embd // self.config.n_head,
-            fix_t=config.block_size,
+            fix_t=config.input_block_size,
             end=config.block_size * 2,
             theta=self.config.rope_theta,
         ).to(config.device)
+        # print("MemorySelfAttention freqs_cis_memory shape: ", config.block_size)
 
         # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(
@@ -103,7 +104,7 @@ class MemorySelfAttention(nn.Module):
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-        if T == self.config.block_size:
+        if T == self.config.input_block_size:
             self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
             self.short_term_memory_updated = True
             # print("Updated short term memory")
