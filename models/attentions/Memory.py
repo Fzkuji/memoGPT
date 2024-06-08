@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
@@ -14,38 +16,38 @@ class MemoryPool(nn.Module):
         self.capacity = capacity
         self.tensor_dims = tensor_dims
         # initialize the pool with zeros
-        self.pool = torch.zeros(max_batch_size, capacity, *tensor_dims)
-        self.pool = self.pool.to(config.device)
-        # self.pool_k = torch.zeros(max_batch_size, capacity, *tensor_dims)
-        # self.pool_v = torch.zeros(max_batch_size, capacity, *tensor_dims)
+        # self.pool = torch.zeros(max_batch_size, capacity, *tensor_dims)
+        self.pool_q = torch.zeros(max_batch_size, capacity, *tensor_dims).to(config.device)
+        self.pool_k = torch.zeros(max_batch_size, capacity, *tensor_dims).to(config.device)
+        self.pool_v = torch.zeros(max_batch_size, capacity, *tensor_dims).to(config.device)
 
     def get_all(self, batch_size):
         """ Return a tensor containing all elements in the pool """
         assert batch_size <= self.batch_size, f"Batch size {batch_size} is greater than the maximum batch size {self.batch_size}"
-        return self.pool[:batch_size]
-        # return self.pool_q[:batch_size], self.pool_k[:batch_size], self.pool_v[:batch_size]
+        # return self.pool[:batch_size]
+        return self.pool_q[:batch_size], self.pool_k[:batch_size], self.pool_v[:batch_size]
 
     def get_len(self):
         return self.capacity
 
     # def update(self, tensor_q, tensor_k, tensor_v):
-    def update(self, tensor):
+    def update(self, tensor_q, tensor_k, tensor_v):
         """ Update the pool with a new tensor """
         # assert tensor_q.shape == tensor_k.shape == tensor_v.shape, "All tensors should have the same shape"
 
-        bsz, seqlen, *dim = tensor.shape
+        bsz, seqlen, *dim = tensor_q.shape
         assert bsz <= self.batch_size, f"Batch size {bsz} is greater than the maximum batch size {self.batch_size}"
         assert seqlen == self.capacity, f"Sequence length {seqlen} is not equal to the capacity {self.capacity}"
 
-        self.pool[:bsz, :, :] = tensor.detach()
-        # self.pool_k[:bsz, :, :] = tensor_k
-        # self.pool_v[:bsz, :, :] = tensor_v
+        self.pool_q[:bsz, :, :] = tensor_q.detach()
+        self.pool_k[:bsz, :, :] = tensor_k.detach()
+        self.pool_v[:bsz, :, :] = tensor_v.detach()
 
     def clear(self):
         """ Clear the pool """
-        self.pool.fill_(0)  # Efficient way to reset all elements to zero
-        # self.pool_k.fill_(0)
-        # self.pool_v.fill_(0)
+        self.pool_q.fill_(0)  # Efficient way to reset all elements to zero
+        self.pool_k.fill_(0)
+        self.pool_v.fill_(0)
 
 
 class MemoryQueue(nn.Module):
@@ -120,9 +122,24 @@ class MemoryQueue(nn.Module):
         self.queue_v = []
         self.index = 0
 
+@dataclass
+class MemoryConfig:
+    max_batch_size: int = 64
+
+    short_term_memory_size: int = 16
+    long_term_memory_layer: int = 16
+    long_term_memory_chunk_size: int = 4
+    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
+                             [short_term_memory_size * (long_term_memory_chunk_size - 1)])
+
+    rope_theta: float = 500000
+
+    n_embd: int = 768
+    device: str = 'cuda'
+
 
 class Memory(nn.Module):
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: MemoryConfig):
         super(Memory, self).__init__()
         self.config = config
         self.max_len = sum(config.long_term_memory_size) + config.short_term_memory_size
