@@ -10,3 +10,9 @@ fairscale
 fire
 tiktoken
 blobfile
+accelerate
+bitsandbytes
+notebook
+trl
+peft
+nvitop
