@@ -257,10 +257,17 @@ class LlamaMemoryAttention(LlamaAttention):
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            # expand the mask to memory
-
-
-            attn_weights = attn_weights + causal_mask
+            # expand the front of the mask according to the length of memory (long + short)
+            memory_length = long_key_states.shape[2] + short_key_states.shape[2]
+            fill_value = attention_mask[0, 0, 0, 0].item()
+            expanded_mask = torch.cat(
+                [
+                    torch.full((bsz, 1, 1, memory_length), fill_value=fill_value, device=attention_mask.device, dtype=attention_mask.dtype),
+                    causal_mask
+                ],
+                dim=-3,
+            )
+            attn_weights = attn_weights + expanded_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
