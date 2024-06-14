@@ -23,6 +23,7 @@ if __name__ == '__main__':
     dataset = load_dataset(
         "openwebtext",
         num_proc=num_proc_load_dataset,
+        trust_remote_code=True,
         # cache_dir="/root/autodl-tmp/openwebtext",
     )
 

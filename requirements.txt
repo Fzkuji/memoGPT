@@ -16,3 +16,4 @@ notebook
 trl
 peft
 nvitop
+wandb

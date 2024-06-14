@@ -4,12 +4,12 @@ out_dir = 'out-owt'
 eval_interval = 1000
 eval_iters = 20
 log_interval = 10
-wandb_log = True  # feel free to turn on
+wandb_log = False  # feel free to turn on
 wandb_project = 'owt'
 wandb_run_name = 'ft-' + str(time.time())
 
 dataset = 'openwebtext'
-init_from = 'resume'  # this is the largest GPT-2 model
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # this is the largest GPT-2 model
 
 # only save checkpoints if the validation loss improves
 always_save_checkpoint = True

@@ -55,7 +55,7 @@ class GPT(nn.Module):
             wte=nn.Embedding(config.vocab_size, config.n_embd),
             wpe=nn.Embedding(config.block_size, config.n_embd),
             drop=nn.Dropout(config.dropout),
-            h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            layers=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f=LayerNorm(config.n_embd, bias=config.bias),
         ))
         # 输出wte支持的最大输入
@@ -146,7 +146,7 @@ class GPT(nn.Module):
                 for tok_emb_section in tok_emb_sections:
                     if current_index == index:
                         break
-                    for block in self.transformer.h:
+                    for block in self.transformer.layers:
                         tok_emb_section = block(tok_emb_section)
 
                     del tok_emb_section  # 删除不再使用的变量
@@ -157,7 +157,7 @@ class GPT(nn.Module):
 
             # 计算指定index段
             tok_emb_section = tok_emb_sections[index]
-            for block in self.transformer.h:
+            for block in self.transformer.layers:
                 tok_emb_section = block(tok_emb_section)
 
             logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
@@ -168,7 +168,7 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
 
             # 清除memory
-            for block in self.transformer.h:
+            for block in self.transformer.layers:
                 block.attn.memory.clear_all()
 
             # 使用index仅限于训练，因此不需要保存logits
@@ -177,7 +177,7 @@ class GPT(nn.Module):
         else:  # 如果index为None，则计算整个Input的损失和预测
             for tok_emb_section in tok_emb_sections:
                 section_len = tok_emb_section.size(1)
-                for block in self.transformer.h:
+                for block in self.transformer.layers:
                     tok_emb_section = block(tok_emb_section)
 
                 logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
@@ -191,7 +191,7 @@ class GPT(nn.Module):
 
                 current_pos += section_len
 
-            for block in self.transformer.h:
+            for block in self.transformer.layers:
                 block.attn.memory.clear_all()
 
             if targets is not None:
@@ -208,67 +208,69 @@ class GPT(nn.Module):
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
         self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-        for block in self.transformer.h:
+        for block in self.transformer.layers:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        override_args = override_args or {}  # default to empty dict
-        # only dropout can be overridden see more notes below
-        assert all(k == 'dropout' for k in override_args)
-        from transformers import GPT2LMHeadModel
-        print("loading weights from pretrained gpt: %s" % model_type)
+        if "gpt2" in model_type:
+            pass
+        elif "qwen" in model_type:
+            assert model_type in {'Qwen/Qwen2-0.5B-Instruct', 'Qwen/Qwen2-1.5B-Instruct', 'Qwen/Qwen2-7B-Instruct'}
+            override_args = override_args or {}  # default to empty dict
+            # only dropout can be overridden see more notes below
+            assert all(k == 'dropout' for k in override_args)
+            from transformers import Qwen2ForCausalLM
+            print("loading weights from pretrained Qwen2: %s" % model_type)
 
-        # n_layer, n_head and n_embd are determined from model_type
-        config_args = {
-            'gpt2': dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
-            'gpt2-medium': dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
-            'gpt2-large': dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
-            'gpt2-xl': dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
-        }[model_type]
-        print("forcing vocab_size=50257, block_size=1024, bias=True")
-        config_args['vocab_size'] = 50257  # always 50257 for GPT model checkpoints
-        config_args['block_size'] = 1024  # always 1024 for GPT model checkpoints
-        config_args['bias'] = True  # always True for GPT model checkpoints
-        # we can override the dropout rate, if desired
-        if 'dropout' in override_args:
-            print(f"overriding dropout rate to {override_args['dropout']}")
-            config_args['dropout'] = override_args['dropout']
-        # create a from-scratch initialized minGPT model
-        config = GPTConfig(**config_args)
-        model = GPT(config)
-        sd = model.state_dict()
-        sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]  # discard this mask / buffer, not a param
+            # n_layer, n_head and n_embd are determined from model_type
+            config_args = {
+                'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, n_head=12, n_embd=768),
+                'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=24, n_head=16, n_embd=1024),
+                'Qwen/Qwen2-7B-Instruct': dict(n_layer=36, n_head=20, n_embd=1280),
+            }[model_type]
+            print("forcing vocab_size=50257, block_size=1024, bias=True")
+            config_args['vocab_size'] = 50257  # always 50257 for GPT model checkpoints
+            config_args['block_size'] = 1024  # always 1024 for GPT model checkpoints
+            config_args['bias'] = True  # always True for GPT model checkpoints
+            # we can override the dropout rate, if desired
+            if 'dropout' in override_args:
+                print(f"overriding dropout rate to {override_args['dropout']}")
+                config_args['dropout'] = override_args['dropout']
+            # create a from-scratch initialized minGPT model
+            config = GPTConfig(**config_args)
+            model = GPT(config)
+            sd = model.state_dict()
+            sd_keys = sd.keys()
+            sd_keys = [k for k in sd_keys if not k.endswith('.self_attn.bias')]  # discard this mask / buffer, not a param
 
-        # init a huggingface/transformers model
-        model_hf = GPT2LMHeadModel.from_pretrained(
-            model_type,
-        )
-        sd_hf = model_hf.state_dict()
+            # init a huggingface/transformers model
+            model_hf = Qwen2ForCausalLM.from_pretrained(
+                model_type,
+            )
+            sd_hf = model_hf.state_dict()
 
-        # copy while ensuring all of the parameters are aligned and match in names and shapes
-        sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')]  # ignore these, just a buffer
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')]  # same, just the mask (buffer)
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-        # this means that we have to transpose these weights when we import them
-        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-        for k in sd_keys_hf:
-            if any(k.endswith(w) for w in transposed):
-                # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k].shape[::-1] == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k].t())
-            else:
-                # vanilla copy over the other parameters
-                assert sd_hf[k].shape == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
-        return model
+            # copy while ensuring all of the parameters are aligned and match in names and shapes
+            sd_keys_hf = sd_hf.keys()
+            sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
+            sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.bias')]  # same, just the mask (buffer)
+            transposed = ['self_attn.c_attn.weight', 'self_attn.o_proj.weight', 'mlp.c_fc.weight', 'mlp.o_proj.weight']
+            # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+            # this means that we have to transpose these weights when we import them
+            assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+            for k in sd_keys_hf:
+                if any(k.endswith(w) for w in transposed):
+                    # special treatment for the Conv1D weights we need to transpose
+                    assert sd_hf[k].shape[::-1] == sd[k].shape
+                    with torch.no_grad():
+                        sd[k].copy_(sd_hf[k].t())
+                else:
+                    # vanilla copy over the other parameters
+                    assert sd_hf[k].shape == sd[k].shape
+                    with torch.no_grad():
+                        sd[k].copy_(sd_hf[k])
+            return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters

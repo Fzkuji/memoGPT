@@ -14,11 +14,13 @@ class MemorySelfAttention(nn.Module):
         super().__init__()
         self.short_term_memory_updated = False
         self.config = config
-        assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -62,7 +64,9 @@ class MemorySelfAttention(nn.Module):
         q_list, k_list, v_list = [], [], []
         for i in [short_term_memory, x]:
             # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-            q, k, v = self.c_attn(i).split(self.n_embd, dim=2)
+            q = self.q_proj(i)
+            k = self.k_proj(i)
+            v = self.v_proj(i)
 
             k_list.append(k.view(B, -1, self.n_head, C // self.n_head))  # (B, T, nh, hs)
             q_list.append(q.view(B, -1, self.n_head, C // self.n_head))  # (B, T, nh, hs)
@@ -111,7 +115,7 @@ class MemorySelfAttention(nn.Module):
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens
-        y = self.resid_dropout(self.c_proj(y))
+        y = self.resid_dropout(self.o_proj(y))
 
         return y
 
