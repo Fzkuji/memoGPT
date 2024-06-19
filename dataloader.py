@@ -7,7 +7,6 @@ from transformers import AutoTokenizer
 from datasets import load_dataset
 
 
-
 class CustomDataset(Dataset):
     def __init__(self, dataset, tokenizer):
         self.dataset = dataset
@@ -67,6 +66,7 @@ def collate_fn(batch, tokenizer):
 
     return input_ids_padded, output_ids_padded, masks
 
+
 '''
 # 加载数据集
 dataset = load_dataset("Open-Orca/OpenOrca", split="train")
@@ -90,14 +90,15 @@ for batch in dataloader:
     break
 '''
 
-def get_batch(config, split, context_len, device, device_type):
+
+def pretraining_get_batch(config, split, context_len, device, device_type):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
-        data = np.memmap(os.path.join(config['data_dir'], 'train.bin'), dtype=np.uint16, mode='r')
+        data = np.memmap(os.path.join(config.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
-        data = np.memmap(os.path.join(config['data_dir'], 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - context_len, (config['batch_size'],))
+        data = np.memmap(os.path.join(config.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    ix = torch.randint(len(data) - context_len, (config.batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i + context_len]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i + 1:i + 1 + context_len]).astype(np.int64)) for i in ix])
     if device_type == 'cuda':
@@ -107,3 +108,21 @@ def get_batch(config, split, context_len, device, device_type):
         x, y = x.to(device), y.to(device)
     return x, y
 
+
+def get_batch(config, device, device_type, data_iter=None):
+    if config.train_mode == 'pretrain':
+        X, Y = pretraining_get_batch(
+            config,
+            'train',
+            config.train_size,
+            device,
+            device_type
+        )  # fetch the very first batch
+        masks = None
+    elif config.train_mode == 'sft':
+        input_ids, output_ids, masks = next(data_iter)
+        X = input_ids.to(device)
+        Y = output_ids.to(device)
+    else:
+        raise ValueError(f"Invalid train_mode: {config.train_mode}")
+    return X, Y, masks

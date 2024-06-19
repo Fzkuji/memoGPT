@@ -6,27 +6,18 @@ from contextlib import nullcontext
 from dataclasses import fields
 
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from models.utils import get_lr
-from dataloader import get_batch, CustomDataset, collate_fn
+from dataloader import pretraining_get_batch, CustomDataset, collate_fn, get_batch
 from models.memoryGPT.eval import estimate_loss
 from models.memoryGPT.gpt2 import GPT
 from models.memoryGPT.config import GPTConfig, TrainConfig
 
-
-# # 从配置文件加载配置
-# config_file = 'configs/finetune_gpt2.py'
-# with open(config_file, 'r', encoding='utf-8') as f:
-#     exec(f.read())
-#
-# # 将配置文件中的所有变量加载到config对象中
-# config_dict = {k: v for k, v in locals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))}
-# config = TrainConfig(**config_dict)
 
 # 从配置文件加载配置
 config_file = 'configs/finetune_gpt2.py'
@@ -66,7 +57,7 @@ else:
     master_process = True
     seed_offset = 0
     ddp_world_size = 1
-tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.block_size
+tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.input_block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
@@ -79,8 +70,8 @@ device_type = 'cuda' if 'cuda' in device else 'cpu'  # for later use in torch.au
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[config.dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
 config_dict['data_dir'] = os.path.join('data', config.dataset)
+config.data_dir = config_dict['data_dir']
 print(f"load data from {config_dict['data_dir']}")
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -133,6 +124,8 @@ elif config.init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+else:
+    raise ValueError(f"Unsupported init_from: {config.init_from}")
 
 model.to(device)
 
@@ -140,8 +133,7 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(config.dtype == 'float16'))
 
 # optimizer
-optimizer = model.configure_optimizers(config.weight_decay, config.learning_rate, (config.beta1, config.beta2),
-                                       device_type)
+optimizer = model.configure_optimizers(config.weight_decay, config.learning_rate, (config.beta1, config.beta2), device_type)
 if config.init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None  # free up memory
@@ -162,25 +154,39 @@ if config.wandb_log and master_process:
 
     wandb.init(project=config.wandb_project, name=config.wandb_run_name, config=config_dict)
 
-# training loop
-if config.train_mode == 'sft':
-    # 加载数据集
-    dataset = load_dataset("Open-Orca/OpenOrca", split="train")
-    # 初始化Llama的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-    # 创建数据集和DataLoader
-    custom_dataset = CustomDataset(dataset, tokenizer)
-    dataloader = DataLoader(custom_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer))
-
-    dataiter = iter(dataloader)
-
+# Data loading
 
 if config.train_mode == 'pretrain':
-    X, Y = get_batch(config_dict, 'train', config.train_size, device, device_type)  # fetch the very first batch
+    train_iter = None
+    val_iter = None
+
 elif config.train_mode == 'sft':
-    input_ids, output_ids, masks = next(dataiter)
-    X = input_ids.to(device)
-    Y = output_ids.to(device)
+    # 加载数据集
+    dataset = load_dataset("Open-Orca/OpenOrca", split="train")
+    train_valtest = dataset.train_test_split(test_size=0.2, seed=config.seed)
+    val_test = train_valtest['test'].train_test_split(test_size=0.5, seed=config.seed)
+    dataset = DatasetDict({
+        'train': train_valtest['train'],
+        'val': val_test['train'],
+        'test': val_test['test'],
+    })
+    # 初始化Llama的tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+
+    # 创建数据集和DataLoader
+    train_dataset = CustomDataset(dataset['train'], tokenizer)
+    val_dataset = CustomDataset(dataset['val'], tokenizer)
+
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer))
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer))
+
+    train_iter = iter(train_loader)
+    val_iter = iter(val_loader)
+
+else:
+    raise ValueError(f"Invalid train_mode: {config.train_mode}")
+
+X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
 
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
@@ -194,39 +200,47 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % config.eval_interval == 0 and master_process:
-        losses = estimate_loss(config_dict, model, ctx, device, device_type, iter_num)
-        print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
-        if config.wandb_log:
-            wandb.log({
-                "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "train/perplexity": losses['train_perplexity'],
-                "val/perplexity": losses['val_perplexity'],
-                "lr": lr,
-                "mfu": running_mfu * 100,  # convert to percentage
-            })
-        if losses['val'] < best_val_loss or config.always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'configs': config_dict,
-                }
-                print(f"saving checkpoint to {config.out_dir}")
-                if losses['val'] < best_val_loss:
-                    torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
-                elif config.always_save_checkpoint:
-                    torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
-    if iter_num == 0 and config.eval_only:
-        break
+    # # evaluate the loss on train/val sets and write checkpoints
+    # if iter_num % config.eval_interval == 0 and master_process:
+    #     losses = estimate_loss(
+    #         config,
+    #         model,
+    #         ctx,
+    #         device,
+    #         device_type,
+    #         iter_num,
+    #         dataiter=val_iter if config.train_mode == 'sft' else None
+    #     )
+    #     print(
+    #         f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
+    #     if config.wandb_log:
+    #         wandb.log({
+    #             "iter": iter_num,
+    #             "train/loss": losses['train'],
+    #             "val/loss": losses['val'],
+    #             "train/perplexity": losses['train_perplexity'],
+    #             "val/perplexity": losses['val_perplexity'],
+    #             "lr": lr,
+    #             "mfu": running_mfu * 100,  # convert to percentage
+    #         })
+    #     if losses['val'] < best_val_loss or config.always_save_checkpoint:
+    #         best_val_loss = losses['val']
+    #         if iter_num > 0:
+    #             checkpoint = {
+    #                 'model': raw_model.state_dict(),
+    #                 'optimizer': optimizer.state_dict(),
+    #                 'model_args': model_args,
+    #                 'iter_num': iter_num,
+    #                 'best_val_loss': best_val_loss,
+    #                 'configs': config_dict,
+    #             }
+    #             print(f"saving checkpoint to {config.out_dir}")
+    #             if losses['val'] < best_val_loss:
+    #                 torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
+    #             elif config.always_save_checkpoint:
+    #                 torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+    # if iter_num == 0 and config.eval_only:
+    #     break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -238,21 +252,11 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == config.gradient_accumulation_steps - 1)
         with ctx:
-            # 生成一个0-train_size_ratio的整数
-            # index = torch.randint(0, train_size_ratio, (1,))
-            if config.train_mode == 'pretrain':
-                _, loss = model(X, Y)
-            elif config.train_mode == 'sft':
-                _, loss = model(X, Y, masks=masks)
+            _, loss = model(X, Y, masks=masks)
             loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
 
-        if config.train_mode == 'pretrain':
-            X, Y = get_batch(config_dict, 'train', config.train_size, device, device_type)  # fetch the very first batch
-        elif config.train_mode == 'sft':
-            input_ids, output_ids, masks = next(dataiter)
-            X = input_ids.to(device)
-            Y = output_ids.to(device)
+        # immediately async prefetch next batch while model is doing the forward pass on the GPU
+        X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
 
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()

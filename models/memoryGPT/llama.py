@@ -177,7 +177,7 @@ class LlamaMemoryAttention(LlamaAttention):
             end=config.block_size * 2,
             theta=self.config.rope_theta,
         ).to(config.device)
-        # print("MemorySelfAttention freqs_cis_memory shape: ", config.block_size)
+        # print("MemorySelfAttention freqs_cis_memory shape: ", config.input_block_size)
 
         # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(

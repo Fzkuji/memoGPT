@@ -73,7 +73,7 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
-        assert config.block_size is not None
+        assert config.input_block_size is not None
         self.config = config
         # print("configs.vocab_size: ", configs.vocab_size)
         self.model = nn.ModuleDict(dict(
@@ -116,17 +116,8 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def split_sequence(self, input_sequence, section_length):
-        """
-        Split a multi-dimensional input sequence into smaller sections along the time dimension.
+    def split_sequence(self, input_sequence, section_length, ):
 
-        Args:
-        - input_sequence (torch.Tensor): Input sequence tensor of shape (b, t, n_embd).
-        - section_length (int): Length of each section along the time dimension.
-
-        Returns:
-        - List[torch.Tensor]: List of tensors, each representing a section of the input sequence.
-        """
         b, t, n_embd = input_sequence.size()
         num_sections = math.ceil(t / section_length)
         sections = []
@@ -139,89 +130,47 @@ class GPT(nn.Module):
 
         return sections
 
-    def forward(self, idx, targets=None, masks=None, index=None):
+    def forward(self, idx, targets=None, masks=None):
         tok_emb = self.model.embed_tokens(idx)
         del idx  # 删除不再使用的变量
         torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-        tok_emb_sections = self.split_sequence(tok_emb, self.config.input_block_size)
-        section_len = tok_emb_sections[0].size(1)
+        tok_emb_sections = self.split_sequence(tok_emb, self.config.memory_block_size)
+
         del tok_emb  # 删除不再使用的变量
         torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-        losses = []
         current_pos = 0
         logits = None
 
-        if index is not None:  # 如果index不为None，则只计算指定index段的的损失和预测
-            if index == -1:
-                index = len(tok_emb_sections) + index
-            assert 0 <= index < len(tok_emb_sections)
-
-            # 输入index段之前的内容，初始化memory
-            current_index = 0
-            with torch.no_grad():
-                for tok_emb_section in tok_emb_sections:
-                    if current_index == index:
-                        break
-                    for block in self.model.layers:
-                        tok_emb_section = block(tok_emb_section)
-
-                    del tok_emb_section  # 删除不再使用的变量
-                    torch.cuda.empty_cache()
-
-                    current_pos += section_len
-                    current_index += 1
-
-            # 计算指定index段
-            tok_emb_section = tok_emb_sections[index]
+        for tok_emb_section in tok_emb_sections:
+            section_len = tok_emb_section.size(1)
             for block in self.model.layers:
                 tok_emb_section = block(tok_emb_section)
 
-            logits_chunk = self.lm_head(self.model.norm(tok_emb_section))
-            del tok_emb_section  # 删除不再使用的变量
-            torch.cuda.empty_cache()
+            logits = self.lm_head(self.model.norm(tok_emb_section)) if logits is None else \
+                torch.cat((logits, self.lm_head(self.model.norm(tok_emb_section))), dim=1)
 
-            # 计算 loss
-            loss = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)),
-                                   targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
+            del tok_emb_section,  # 删除不再使用的变量
+            torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-            # 清除memory
-            for block in self.model.layers:
-                block.self_attn.memory.clear_all()
+            current_pos += section_len
 
-            # 使用index仅限于训练，因此不需要保存logits
+        for block in self.model.layers:
+            block.self_attn.memory.clear_all()
+
+        if targets is not None:
+            if masks is not None:
+                targets[masks == 0] = -1  # 将被 mask 的位置设置为 -1
+            logits = logits.reshape(-1, logits.size(-1))
+            # print("logits shape: ", logits.shape)  # logits shape:  torch.Size([126, 151936])
+            targets = targets.reshape(-1)
+            # print("targets shape: ", targets.shape)  # targets shape:  torch.Size([905])
+            loss = F.cross_entropy(logits, targets, ignore_index=-1)
             return None, loss
-
-        else:  # 如果index为None，则计算整个Input的损失和预测
-            for tok_emb_section in tok_emb_sections:
-                section_len = tok_emb_section.size(1)
-                for block in self.model.layers:
-                    tok_emb_section = block(tok_emb_section)
-
-                logits = self.lm_head(self.model.norm(tok_emb_section)) if logits is None else \
-                    torch.cat((logits, self.lm_head(self.model.norm(tok_emb_section))), dim=1)
-
-                del tok_emb_section,  # 删除不再使用的变量
-                torch.cuda.empty_cache()  # 清除未使用的缓存内存
-
-                current_pos += section_len
-
-            for block in self.model.layers:
-                block.self_attn.memory.clear_all()
-
-            if targets is not None:
-                if masks is not None:
-                    targets[masks == 0] = -1  # 将被 mask 的位置设置为 -1
-                logits = logits.reshape(-1, logits.size(-1))
-                # print("logits shape: ", logits.shape)  # logits shape:  torch.Size([126, 151936])
-                targets = targets.reshape(-1)
-                # print("targets shape: ", targets.shape)  # targets shape:  torch.Size([905])
-                loss = F.cross_entropy(logits, targets, ignore_index=-1)
-                return None, loss
-            else:
-                logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
-                return logits, None
+        else:
+            logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
+            return logits, None
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
@@ -243,8 +192,8 @@ class GPT(nn.Module):
                 'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
                                                intermediate_size=18944, vocab_size=152064),
             }[model_type]
-            print("forcing block_size=32768, bias=True")
-            config_args['block_size'] = 1024  # always 1024 for GPT model checkpoints
+            print("forcing input_block_size=32768, bias=True")
+            config_args['input_block_size'] = 1024  # always 1024 for GPT model checkpoints
             config_args['bias'] = True  # always True for GPT model checkpoints
             # we can override the dropout rate, if desired
             if 'dropout' in override_args:
@@ -324,7 +273,7 @@ class GPT(nn.Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.num_attention_heads, cfg.n_embd // cfg.num_attention_heads, cfg.block_size
+        L, H, Q, T = cfg.n_layer, cfg.num_attention_heads, cfg.n_embd // cfg.num_attention_heads, cfg.input_block_size
         flops_per_token = 6 * N + 12 * L * H * Q * T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -339,7 +288,7 @@ class GPT(nn.Module):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
-        The input sequence is divided into blocks of size block_size and memory is updated accordingly.
+        The input sequence is divided into blocks of size input_block_size and memory is updated accordingly.
         Stop generating if the eos_token_id is generated.
         """
         # 判断输入idx是否为字符串
@@ -352,7 +301,7 @@ class GPT(nn.Module):
             idx = torch.tensor(idx).unsqueeze(0).to(self.config.device)
 
         B, T = idx.size()
-        block_size = self.config.block_size
+        block_size = self.config.memory_block_size
 
         from transformers import AutoTokenizer
         if eos_token_id is None:
@@ -380,7 +329,7 @@ class GPT(nn.Module):
             # Generate one token at a time until the length exceeds block size
             if index >= block_size:
                 index = index - block_size
-                idx_cond = idx_cond[:, -(block_size - 1):]  # Keep the last block_size - 1 tokens
+                idx_cond = idx_cond[:, -(block_size - 1):]  # Keep the last input_block_size - 1 tokens
 
             # Forward the model to get the logits for the last index in the sequence
             logits, _ = self(idx_cond)

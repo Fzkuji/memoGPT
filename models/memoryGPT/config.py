@@ -17,8 +17,8 @@ class GPTConfig:
     rope_theta: float = 500000
     rms_norm_eps: float = 1e-6
 
-    block_size: int = 1024
-    input_block_size: int = 256
+    input_block_size: int = 1024
+    memory_block_size: int = 256
 
     vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
 
@@ -44,6 +44,8 @@ class GPTConfig:
 @dataclass
 class TrainConfig(GPTConfig):
 
+    seed: int = 1337
+
     config_file: str = 'configs/finetune_gpt2.py'
 
     # 输出和日志
@@ -61,6 +63,7 @@ class TrainConfig(GPTConfig):
     dataset: str = 'openwebtext'
     train_mode: str = 'sft'
     init_from: str = 'Qwen/Qwen2-0.5B-Instruct'
+    data_dir: str = 'data'
 
     # 检查点设置
     always_save_checkpoint: bool = True

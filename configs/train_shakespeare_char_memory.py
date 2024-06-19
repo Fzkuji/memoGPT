@@ -28,7 +28,7 @@ val_size = block_size * 1
 
 # 这个值挺好的
 # memory_size = 16
-# block_size = 128  # context of up to 256 previous characters
+# input_block_size = 128  # context of up to 256 previous characters
 
 # baby GPT model :)
 n_layer = 6

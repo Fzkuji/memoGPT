@@ -59,6 +59,16 @@ def apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
+def apply_separate_rotary_emb(
+        xq: torch.Tensor,
+        freqs_cis: torch.Tensor,
+) -> torch.Tensor:
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+    return xq_out.type_as(xq)
+
+
 def apply_rotary_emb_inplace(
         xq: torch.Tensor,
         xk: torch.Tensor,
@@ -116,12 +126,14 @@ def precompute_memory_freqs_cis(ranges: dict, dim: int):
     freqs_concatenated = torch.cat(freqs_list, dim=0)
     return freqs_concatenated
 
-def create_memory_mask(long_term_memory_size, short_term_memory_size, block_size):
-    mask_size = long_term_memory_size + short_term_memory_size + block_size
+
+def create_memory_mask(short_term_memory_size, input_block_size, memory_block_size, max_position_embeddings=32768):
+    input_height = input_block_size + memory_block_size
+    mask_height = short_term_memory_size + input_block_size + memory_block_size
+    width = max_position_embeddings * 2  # max_position_embeddings = 32768
     # Create a mask that is 1 in the lower left triangle and 0 in the upper right triangle
-    mask = torch.tril(torch.ones(mask_size, mask_size))
+    memory_mask = torch.ones(short_term_memory_size, width)
+    input_mask = torch.tril(torch.ones(input_height, width), diagonal=1)
     # Set the memory to 1
-    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :] = 1
-    return mask.view(1, 1, mask_size, mask_size)
-
-
+    mask = torch.cat([memory_mask, input_mask], dim=0)
+    return mask.view(1, 1, mask_height, -1)

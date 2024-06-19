@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from models.attentions.Memory import Memory
-from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis
+from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis, apply_separate_rotary_emb
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -24,7 +24,7 @@ class MemorySelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.short_term_memory_updated = False
+        self.long_term_memory_update = False
         self.config = config
         # key, query, value projections for all heads, but in a batch
         self.num_attention_heads = config.num_attention_heads
@@ -49,31 +49,35 @@ class MemorySelfAttention(nn.Module):
         self.register_buffer(
             "bias",
             create_memory_mask(
-                sum(config.long_term_memory_size),
                 config.short_term_memory_size,
-                config.block_size)
+                config.input_block_size,
+                config.memory_block_size,
+            )
         )
 
         # 实例化RotaryEmbedding
         self.freqs_cis_memory = precompute_freqs_cis(
             dim=self.config.n_embd // self.config.num_attention_heads,
-            fix_t=config.input_block_size,
-            end=config.block_size * 2,
+            fix_t=-config.memory_block_size,
+            end=config.input_block_size * 2,
             theta=self.config.rope_theta,
         ).to(config.device)
-        # print("MemorySelfAttention freqs_cis_memory shape: ", config.block_size)
+        # print("MemorySelfAttention freqs_cis_memory shape: ", config.input_block_size)
 
         # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(
             dim=config.n_embd // config.num_attention_heads,
-            end=config.block_size * 2,
+            end=config.input_block_size * 2,
             theta=config.rope_theta,
         ).to(config.device)
 
-    def forward(self, x):
+    def forward(self, x, short_term_memory_update=False):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
-        end_pos = self.memory.max_len + T
+
+        height = self.config.short_term_memory_size + min(T, self.config.memory_block_size)
+        width_point = 32768 * 2 - 1 - self.config.memory_block_size
+        width_end = width_point + min(T, self.config.memory_block_size)
 
         short_term_memory = self.memory.short_term_memory.get_all(B)
 
@@ -82,7 +86,10 @@ class MemorySelfAttention(nn.Module):
         q_list, k_list, v_list = [], [], []
         for i in [short_term_memory, x]:
             # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-            q = self.q_proj(i)
+            if i is x and T > self.config.memory_block_size:
+                q = self.q_proj(i[:, -self.config.memory_block_size])
+            else:
+                q = self.q_proj(i)
             k = self.k_proj(i)
             v = self.v_proj(i)
 
@@ -92,26 +99,28 @@ class MemorySelfAttention(nn.Module):
 
         long_q, long_k, long_v = self.memory.get_long_term_memory(B)
         start_pos = self.memory.get_long_term_memory_len()
-        long_q.extend(q_list)
+        # long_q.extend(q_list)
         long_k.extend(k_list)
         long_v.extend(v_list)
+        q = torch.cat(q_list, dim=1)
         k = torch.cat(long_k, dim=1)
         v = torch.cat(long_v, dim=1)
-        q = torch.cat(long_q, dim=1)
 
-        if self.short_term_memory_updated:
+        if self.long_term_memory_update:
             self.memory.update_long_term_memory(
-                q[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # q
+                q[:, :self.config.short_term_memory_size, :, :],  # q
                 k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
                 v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
                 self.freqs_cis_memory,
             )
+            self.long_term_memory_update = False
             # print("Updated long term memory")
 
-        apply_rotary_emb(
-            q[:, -T - self.config.short_term_memory_size:, :, :],
+        q = apply_separate_rotary_emb(q, freqs_cis=self.freqs_cis_seq[:q.shape[1]])
+
+        k[:, -T - self.config.short_term_memory_size:, :, :] = apply_separate_rotary_emb(
             k[:, -T - self.config.short_term_memory_size:, :, :],
-            freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size].to(x.device),
+            freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size],
         )
 
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
@@ -122,21 +131,22 @@ class MemorySelfAttention(nn.Module):
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         # manual implementation of attention
-        start_pos = end_pos - q.shape[2]
+        width_start = width_end - k.size(2)
+
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, start_pos:end_pos, start_pos:end_pos] == 0, float('-inf'))
+        att = att.masked_fill(self.bias[:, :, :height, width_start:width_end] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-        if T == self.config.input_block_size:
+        if short_term_memory_update:
             self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-            self.short_term_memory_updated = True
+            self.long_term_memory_update = True
             # print("Updated short term memory")
 
         # output projection
-        y = y[:, -T:, :]  # only take the last T tokens
+        y = y[:, -min(T, self.config.memory_block_size):, :]  # only take the last min(T, self.config.memory_block_size) tokens
         y = self.resid_dropout(self.o_proj(y))
 
         return y

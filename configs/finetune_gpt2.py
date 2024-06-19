@@ -2,6 +2,10 @@ import time
 
 import torch
 
+
+# seed
+seed = 1337
+
 # 输出和日志
 out_dir = 'out-owt'
 eval_interval = 500
@@ -15,7 +19,7 @@ wandb_run_name = 'ft-' + str(time.time())
 
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
-train_mode = 'sft'  # pretrain, sft
+train_mode = 'pretrain'  # pretrain, sft
 init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
@@ -39,12 +43,12 @@ num_key_value_heads = 2
 short_term_memory_size = 16
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-block_size = 1024
-input_block_size = 256
-train_size_ratio = 36  # 32
-val_size_ratio = 36  # Need 22GB per 1024 * 1024 tokens long context
-train_size = input_block_size * train_size_ratio
-val_size = input_block_size * val_size_ratio
+input_block_size = 1024
+memory_block_size = 256
+train_size_ratio = 4  # 32
+val_size_ratio = 4  # Need 22GB per 1024 * 1024 tokens long context
+train_size = memory_block_size * train_size_ratio
+val_size = memory_block_size * val_size_ratio
 
 # 优化器参数
 learning_rate = 8e-5
