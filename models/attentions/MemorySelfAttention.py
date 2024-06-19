@@ -8,6 +8,18 @@ from models.attentions.Memory import Memory
 from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis
 
 
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
 class MemorySelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -15,18 +27,24 @@ class MemorySelfAttention(nn.Module):
         self.short_term_memory_updated = False
         self.config = config
         # key, query, value projections for all heads, but in a batch
+        self.num_attention_heads = config.num_attention_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = config.n_embd // config.num_attention_heads
+        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
         self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
+        self.v_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
+
 
         # output projection
-        self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)  # 注意这边的bias，qwen2是False，其他模型可能会变
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        self.n_head = config.n_head
+
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+
         self.memory = Memory(config)
         self.register_buffer(
             "bias",
@@ -38,7 +56,7 @@ class MemorySelfAttention(nn.Module):
 
         # 实例化RotaryEmbedding
         self.freqs_cis_memory = precompute_freqs_cis(
-            dim=self.config.n_embd // self.config.n_head,
+            dim=self.config.n_embd // self.config.num_attention_heads,
             fix_t=config.input_block_size,
             end=config.block_size * 2,
             theta=self.config.rope_theta,
@@ -47,7 +65,7 @@ class MemorySelfAttention(nn.Module):
 
         # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(
-            dim=config.n_embd // config.n_head,
+            dim=config.n_embd // config.num_attention_heads,
             end=config.block_size * 2,
             theta=config.rope_theta,
         ).to(config.device)
@@ -68,9 +86,9 @@ class MemorySelfAttention(nn.Module):
             k = self.k_proj(i)
             v = self.v_proj(i)
 
-            k_list.append(k.view(B, -1, self.n_head, C // self.n_head))  # (B, T, nh, hs)
-            q_list.append(q.view(B, -1, self.n_head, C // self.n_head))  # (B, T, nh, hs)
-            v_list.append(v.view(B, -1, self.n_head, C // self.n_head))  # (B, T, nh, hs)
+            q_list.append(q.view(B, -1, self.num_attention_heads, self.head_dim))  # (B, T, nh, hs)
+            k_list.append(k.view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
+            v_list.append(v.view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
 
         long_q, long_k, long_v = self.memory.get_long_term_memory(B)
         start_pos = self.memory.get_long_term_memory_len()
@@ -97,6 +115,10 @@ class MemorySelfAttention(nn.Module):
         )
 
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        k = repeat_kv(k, self.num_key_value_groups)
+        v = repeat_kv(v, self.num_key_value_groups)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         # manual implementation of attention

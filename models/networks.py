@@ -19,21 +19,21 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
-class MLP(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.gelu = nn.GELU()
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        x = self.c_fc(x)
-        x = self.gelu(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
+# class MLP(nn.Module):
+#
+#     def __init__(self, config):
+#         super().__init__()
+#         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+#         self.gelu = nn.GELU()
+#         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+#         self.dropout = nn.Dropout(config.dropout)
+#
+#     def forward(self, x):
+#         x = self.c_fc(x)
+#         x = self.gelu(x)
+#         x = self.c_proj(x)
+#         x = self.dropout(x)
+#         return x
 
 
 def log_memory_usage(tag):
@@ -60,15 +60,15 @@ class MoeArgs(Serializable):
 
 
 class MoeLayer(nn.Module):
-    def __init__(self, experts: List[nn.Module], gate: nn.Module, moe_args: MoeArgs):
+    def __init__(self, experts: List[nn.Module], gate_proj: nn.Module, moe_args: MoeArgs):
         super().__init__()
         assert len(experts) > 0
         self.experts = nn.ModuleList(experts)
-        self.gate = gate
+        self.gate_proj = gate_proj
         self.args = moe_args
 
     def forward(self, inputs: torch.Tensor):
-        gate_logits = self.gate(inputs)
+        gate_logits = self.gate_proj(inputs)
         weights, selected_experts = torch.topk(gate_logits, self.args.num_experts_per_tok)
         weights = F.softmax(weights, dim=2, dtype=torch.float).to(inputs.dtype)
 

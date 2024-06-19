@@ -13,33 +13,58 @@ import inspect
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from transformers.activations import ACT2FN
 
 from . import GPTConfig
-from models.networks import LayerNorm, MLP, FeedForward, MoeArgs, MoeLayer
+from models.networks import LayerNorm, FeedForward, MoeArgs, MoeLayer
 from models.attentions.MemorySelfAttention import MemorySelfAttention
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        Qwen2RMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+
+# Copied from transformers.models.mistral.modeling_mistral.MistralMLP with Mistral->Qwen2
+class MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_size = config.n_embd
+        self.intermediate_size = config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_state):
+        return self.down_proj(self.act_fn(self.gate_proj(hidden_state)) * self.up_proj(hidden_state))
 
 
 class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.input_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
         # 用config类型判断是否使用MemorySelfAttention
-        self.attn = MemorySelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        if config.use_moe:
-            self.moe_arg = MoeArgs(num_experts=config.n_expert, num_experts_per_tok=config.n_expert_per_tok)
-            self.mlp = MoeLayer(
-                experts=[FeedForward(config=config) for _ in range(config.n_expert)],
-                gate=nn.Linear(config.n_embd, config.n_expert, bias=False),
-                moe_args=self.moe_arg,
-            )
-        else:
-            self.mlp = MLP(config)
+        self.self_attn = MemorySelfAttention(config)
+        self.post_attention_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
+        self.mlp = MLP(config)
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.self_attn(self.input_layernorm(x))
+        x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
 
@@ -51,22 +76,17 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
         # print("configs.vocab_size: ", configs.vocab_size)
-        self.transformer = nn.ModuleDict(dict(
-            wte=nn.Embedding(config.vocab_size, config.n_embd),
-            wpe=nn.Embedding(config.block_size, config.n_embd),
+        self.model = nn.ModuleDict(dict(
+            embed_tokens=nn.Embedding(config.vocab_size, config.n_embd),
             drop=nn.Dropout(config.dropout),
             layers=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f=LayerNorm(config.n_embd, bias=config.bias),
+            norm=RMSNorm(config.n_embd, eps=config.rms_norm_eps),
+
         ))
         # 输出wte支持的最大输入
-        print("wte max: ", self.transformer.wte.num_embeddings)
+        print("wte max: ", self.model.embed_tokens.num_embeddings)
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight  # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
@@ -86,8 +106,6 @@ class GPT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        # if non_embedding:
-        #     n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
     def _init_weights(self, module):
@@ -121,19 +139,19 @@ class GPT(nn.Module):
 
         return sections
 
-    def forward(self, idx, targets=None, index=None):
-        tok_emb = self.transformer.wte(idx)
+    def forward(self, idx, targets=None, masks=None, index=None):
+        tok_emb = self.model.embed_tokens(idx)
         del idx  # 删除不再使用的变量
         torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-        tok_emb_sections = self.split_sequence(tok_emb, self.config.block_size)
+        tok_emb_sections = self.split_sequence(tok_emb, self.config.input_block_size)
         section_len = tok_emb_sections[0].size(1)
         del tok_emb  # 删除不再使用的变量
         torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
         losses = []
         current_pos = 0
-        logits_chunk = None
+        logits = None
 
         if index is not None:  # 如果index不为None，则只计算指定index段的的损失和预测
             if index == -1:
@@ -146,7 +164,7 @@ class GPT(nn.Module):
                 for tok_emb_section in tok_emb_sections:
                     if current_index == index:
                         break
-                    for block in self.transformer.layers:
+                    for block in self.model.layers:
                         tok_emb_section = block(tok_emb_section)
 
                     del tok_emb_section  # 删除不再使用的变量
@@ -157,19 +175,20 @@ class GPT(nn.Module):
 
             # 计算指定index段
             tok_emb_section = tok_emb_sections[index]
-            for block in self.transformer.layers:
+            for block in self.model.layers:
                 tok_emb_section = block(tok_emb_section)
 
-            logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
+            logits_chunk = self.lm_head(self.model.norm(tok_emb_section))
             del tok_emb_section  # 删除不再使用的变量
             torch.cuda.empty_cache()
 
             # 计算 loss
-            loss = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
+            loss = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)),
+                                   targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
 
             # 清除memory
-            for block in self.transformer.layers:
-                block.attn.memory.clear_all()
+            for block in self.model.layers:
+                block.self_attn.memory.clear_all()
 
             # 使用index仅限于训练，因此不需要保存logits
             return None, loss
@@ -177,47 +196,38 @@ class GPT(nn.Module):
         else:  # 如果index为None，则计算整个Input的损失和预测
             for tok_emb_section in tok_emb_sections:
                 section_len = tok_emb_section.size(1)
-                for block in self.transformer.layers:
+                for block in self.model.layers:
                     tok_emb_section = block(tok_emb_section)
 
-                logits_chunk = self.lm_head(self.transformer.ln_f(tok_emb_section))
-                del tok_emb_section,   # 删除不再使用的变量
-                torch.cuda.empty_cache()  # 清除未使用的缓存内存
+                logits = self.lm_head(self.model.norm(tok_emb_section)) if logits is None else \
+                    torch.cat((logits, self.lm_head(self.model.norm(tok_emb_section))), dim=1)
 
-                # 计算 loss
-                if targets is not None:
-                    loss_chunk = F.cross_entropy(logits_chunk.reshape(-1, logits_chunk.size(-1)), targets[:, current_pos:current_pos + section_len].reshape(-1), ignore_index=-1)
-                    losses.append(loss_chunk)
+                del tok_emb_section,  # 删除不再使用的变量
+                torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
                 current_pos += section_len
 
-            for block in self.transformer.layers:
-                block.attn.memory.clear_all()
+            for block in self.model.layers:
+                block.self_attn.memory.clear_all()
 
             if targets is not None:
-                loss = torch.stack(losses).mean()  # 计算平均损失
+                if masks is not None:
+                    targets[masks == 0] = -1  # 将被 mask 的位置设置为 -1
+                logits = logits.reshape(-1, logits.size(-1))
+                # print("logits shape: ", logits.shape)  # logits shape:  torch.Size([126, 151936])
+                targets = targets.reshape(-1)
+                # print("targets shape: ", targets.shape)  # targets shape:  torch.Size([905])
+                loss = F.cross_entropy(logits, targets, ignore_index=-1)
                 return None, loss
             else:
-                logits = logits_chunk[:, [-1], :]  # 只保留最后一个时间步的 logits
+                logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
                 return logits, None
-
-    def crop_block_size(self, block_size):
-        # model surgery to decrease the block size if necessary
-        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
-        # but want to use a smaller block size for some smaller, simpler model
-        assert block_size <= self.config.block_size
-        self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-        for block in self.transformer.layers:
-            if hasattr(block.attn, 'bias'):
-                block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
         if "gpt2" in model_type:
             pass
-        elif "qwen" in model_type:
-            assert model_type in {'Qwen/Qwen2-0.5B-Instruct', 'Qwen/Qwen2-1.5B-Instruct', 'Qwen/Qwen2-7B-Instruct'}
+        elif "Qwen" in model_type:
             override_args = override_args or {}  # default to empty dict
             # only dropout can be overridden see more notes below
             assert all(k == 'dropout' for k in override_args)
@@ -226,12 +236,14 @@ class GPT(nn.Module):
 
             # n_layer, n_head and n_embd are determined from model_type
             config_args = {
-                'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, n_head=12, n_embd=768),
-                'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=24, n_head=16, n_embd=1024),
-                'Qwen/Qwen2-7B-Instruct': dict(n_layer=36, n_head=20, n_embd=1280),
+                'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, num_attention_heads=14, num_key_value_heads=2, n_embd=896,
+                                                 intermediate_size=4864, vocab_size=151936),
+                'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=28, num_attention_heads=12, num_key_value_heads=2, n_embd=1536,
+                                                 intermediate_size=8960, vocab_size=151936),
+                'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
+                                               intermediate_size=18944, vocab_size=152064),
             }[model_type]
-            print("forcing vocab_size=50257, block_size=1024, bias=True")
-            config_args['vocab_size'] = 50257  # always 50257 for GPT model checkpoints
+            print("forcing block_size=32768, bias=True")
             config_args['block_size'] = 1024  # always 1024 for GPT model checkpoints
             config_args['bias'] = True  # always True for GPT model checkpoints
             # we can override the dropout rate, if desired
@@ -241,9 +253,15 @@ class GPT(nn.Module):
             # create a from-scratch initialized minGPT model
             config = GPTConfig(**config_args)
             model = GPT(config)
+
+            # # print all state_dict shape
+            # for key in model.state_dict().keys():
+            #     print(key, model.state_dict()[key].shape)
+
             sd = model.state_dict()
             sd_keys = sd.keys()
-            sd_keys = [k for k in sd_keys if not k.endswith('.self_attn.bias')]  # discard this mask / buffer, not a param
+            sd_keys = [k for k in sd_keys if
+                       not k.endswith('.self_attn.bias')]  # discard this mask / buffer, not a param
 
             # init a huggingface/transformers model
             model_hf = Qwen2ForCausalLM.from_pretrained(
@@ -253,23 +271,25 @@ class GPT(nn.Module):
 
             # copy while ensuring all of the parameters are aligned and match in names and shapes
             sd_keys_hf = sd_hf.keys()
-            sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
+            sd_keys_hf = [k for k in sd_keys_hf if
+                          not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
             sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.bias')]  # same, just the mask (buffer)
-            transposed = ['self_attn.c_attn.weight', 'self_attn.o_proj.weight', 'mlp.c_fc.weight', 'mlp.o_proj.weight']
-            # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
-            # this means that we have to transpose these weights when we import them
+
+            # # print mismatched keys
+            # print("mismatched keys: ", [k for k in sd_keys if k not in sd_keys_hf])
+            # print("mismatched keys: ", [k for k in sd_keys_hf if k not in sd_keys])
+
             assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+
             for k in sd_keys_hf:
-                if any(k.endswith(w) for w in transposed):
-                    # special treatment for the Conv1D weights we need to transpose
-                    assert sd_hf[k].shape[::-1] == sd[k].shape
-                    with torch.no_grad():
-                        sd[k].copy_(sd_hf[k].t())
-                else:
-                    # vanilla copy over the other parameters
-                    assert sd_hf[k].shape == sd[k].shape
-                    with torch.no_grad():
-                        sd[k].copy_(sd_hf[k])
+                # vanilla copy over the other parameters
+                # print shape mismatches
+                if sd[k].shape != sd_hf[k].shape:
+                    print(f"shape mismatch: {k} shape {sd[k].shape} != {sd_hf[k].shape}")
+                assert sd_hf[k].shape == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+            print("loaded successfully")
             return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -304,7 +324,7 @@ class GPT(nn.Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size
+        L, H, Q, T = cfg.n_layer, cfg.num_attention_heads, cfg.n_embd // cfg.num_attention_heads, cfg.block_size
         flops_per_token = 6 * N + 12 * L * H * Q * T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -315,15 +335,31 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, eos_token_id, temperature=1.0, top_k=None):
+    def generate(self, idx, max_new_tokens=None, eos_token_id=None, temperature=1.0, top_k=None, output_type="str"):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
         The input sequence is divided into blocks of size block_size and memory is updated accordingly.
         Stop generating if the eos_token_id is generated.
         """
+        # 判断输入idx是否为字符串
+        if isinstance(idx, str):
+            from transformers import AutoTokenizer
+            enc = AutoTokenizer.from_pretrained(
+                self.config.init_from,
+            )
+            idx = enc.encode(idx, add_special_tokens=False)
+            idx = torch.tensor(idx).unsqueeze(0).to(self.config.device)
+
         B, T = idx.size()
         block_size = self.config.block_size
+
+        from transformers import AutoTokenizer
+        if eos_token_id is None:
+            enc = AutoTokenizer.from_pretrained(
+                self.config.init_from,
+            )
+            eos_token_id = enc.convert_tokens_to_ids(enc.pad_token)
 
         # Initialize memory by processing the initial blocks except the last one
         current_pos = 0
@@ -337,7 +373,7 @@ class GPT(nn.Module):
         index = max(0, index)
         idx_cond = idx[:, index:]
         m = idx_cond.size(1)
-        index = m-1
+        index = m - 1
         gen_len = 0
 
         while True:
@@ -359,7 +395,7 @@ class GPT(nn.Module):
             probs = F.softmax(logits, dim=-1)
 
             # Sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
+            idx_next = torch.multinomial(probs, num_samples=1).to(self.config.device)
 
             # Append sampled index to the running sequence
             idx_cond = torch.cat((idx_cond, idx_next), dim=1)
@@ -379,7 +415,14 @@ class GPT(nn.Module):
 
             gen_len += 1
 
-            if gen_len >= max_new_tokens:
+            if (max_new_tokens is not None and gen_len >= max_new_tokens) or gen_len > 1024:
                 break
-        return idx
 
+        if output_type == "str":
+            from transformers import AutoTokenizer
+            enc = AutoTokenizer.from_pretrained(
+                self.config.init_from,
+            )
+            return enc.decode(idx[0].tolist())
+
+        return idx

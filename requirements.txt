@@ -17,3 +17,5 @@ trl
 peft
 nvitop
 wandb
+datatrove
+pandas

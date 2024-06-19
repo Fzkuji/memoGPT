@@ -5,6 +5,47 @@ from models.memoryGPT.config import GPTConfig
 from models.utils import apply_rotary_emb
 
 
+# class MemoryPool(nn.Module):
+#     """ A simple pool for storing tensors with a fixed capacity """
+#
+#     def __init__(self, config, capacity, attention_head_dims, key_value_head_dims, max_batch_size=64):
+#         super(MemoryPool, self).__init__()
+#         self.batch_size = max_batch_size
+#         self.capacity = capacity
+#
+#         # initialize the pool with zeros
+#         self.pool_q = torch.zeros(max_batch_size, capacity, attention_head_dims)
+#         self.pool_k = torch.zeros(max_batch_size, capacity, key_value_head_dims)
+#         self.pool_v = torch.zeros(max_batch_size, capacity, key_value_head_dims)
+#
+#     def get_all(self, batch_size):
+#         """ Return a tensor containing all elements in the pool """
+#         assert batch_size <= self.batch_size, f"Batch size {batch_size} is greater than the maximum batch size {self.batch_size}"
+#         # return self.pool[:batch_size]
+#         return self.pool_q[:batch_size], self.pool_k[:batch_size], self.pool_v[:batch_size]
+#
+#     def get_len(self):
+#         return self.capacity
+#
+#     def update(self, tensor_q, tensor_k, tensor_v):
+#         """ Update the pool with a new tensor """
+#         # assert tensor_q.shape == tensor_k.shape == tensor_v.shape, "All tensors should have the same shape"
+#
+#         bsz, seqlen, *dim = tensor_q.shape
+#         assert bsz <= self.batch_size, f"Batch size {bsz} is greater than the maximum batch size {self.batch_size}"
+#         assert seqlen == self.capacity, f"Sequence length {seqlen} is not equal to the capacity {self.capacity}"
+#
+#         self.pool_q[:bsz, :, :] = tensor_q.detach()
+#         self.pool_k[:bsz, :, :] = tensor_k.detach()
+#         self.pool_v[:bsz, :, :] = tensor_v.detach()
+#
+#     def clear(self):
+#         """ Clear the pool """
+#         self.pool_q.fill_(0)  # Efficient way to reset all elements to zero
+#         self.pool_k.fill_(0)
+#         self.pool_v.fill_(0)
+
+
 class MemoryPool(nn.Module):
     """ A simple pool for storing tensors with a fixed capacity """
 
