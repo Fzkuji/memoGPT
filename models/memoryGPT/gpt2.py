@@ -62,8 +62,8 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.self_attn(self.input_layernorm(x))
+    def forward(self, x, memory_update_flag):
+        x = x + self.self_attn(self.input_layernorm(x), memory_update_flag)
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
@@ -98,6 +98,9 @@ class GPT(nn.Module):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
+        self.past_input = None
+        self.tokens_left_to_update_memory = self.config.memory_block_size
+
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
@@ -131,42 +134,82 @@ class GPT(nn.Module):
         return sections
 
     def forward(self, idx, targets=None, masks=None):
+
+        batch_size, input_seq_len = idx.size()
+
+        # 定义 input_block_size 和 memory_block_size
+        input_block_size = self.config.input_block_size  # 例如 1024
+        memory_block_size = self.config.memory_block_size  # 例如 256
+
+        if self.past_input is not None:
+            end_pos = self.past_input.size(1)
+            idx = torch.cat((self.past_input, idx), dim=1)
+            self.past_input = None
+        else:
+            end_pos = 0
+
+        # 嵌入所有的 tokens
         tok_emb = self.model.embed_tokens(idx)
         del idx  # 删除不再使用的变量
         torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
-        tok_emb_sections = self.split_sequence(tok_emb, self.config.memory_block_size)
+        # 准备变量
 
-        del tok_emb  # 删除不再使用的变量
-        torch.cuda.empty_cache()  # 清除未使用的缓存内存
-
-        current_pos = 0
         logits = None
+        seq_len = tok_emb.size(1)  # 序列总长度
 
-        for tok_emb_section in tok_emb_sections:
-            section_len = tok_emb_section.size(1)
+        while end_pos < seq_len:
+
+            if self.tokens_left_to_update_memory - (seq_len - end_pos) > 0:
+                # 如果输入序列的长度小于更新记忆需要的 token 数
+                predict_len = seq_len - end_pos
+                end_pos = seq_len
+                start_pos = max(end_pos - memory_block_size - input_block_size, 0)
+                self.tokens_left_to_update_memory -= (seq_len - end_pos)
+                memory_update_flag = False
+            else:
+                # 如果输入序列的长度大于更新记忆需要的 token 数
+                print("tokens_left_to_update_memory: ", self.tokens_left_to_update_memory)
+                predict_len = self.tokens_left_to_update_memory
+                end_pos = end_pos + self.tokens_left_to_update_memory
+                start_pos = max(end_pos - memory_block_size - input_block_size, 0)
+                self.tokens_left_to_update_memory = memory_block_size
+                memory_update_flag = True
+            print("start_pos: ", start_pos)
+            print("end_pos: ", end_pos)
+
+            # 获取当前块的 tok_emb
+            tok_emb_section = tok_emb[:, start_pos:end_pos, :]
+            print("tok_emb_section: ", tok_emb_section.size())
+
+            # 通过模型层
             for block in self.model.layers:
-                tok_emb_section = block(tok_emb_section)
+                tok_emb_section = block(tok_emb_section, memory_update_flag)
 
-            logits = self.lm_head(self.model.norm(tok_emb_section)) if logits is None else \
-                torch.cat((logits, self.lm_head(self.model.norm(tok_emb_section))), dim=1)
+            # 获取当前块的 logits
+            current_logits = self.lm_head(self.model.norm(tok_emb_section))
 
-            del tok_emb_section,  # 删除不再使用的变量
-            torch.cuda.empty_cache()  # 清除未使用的缓存内存
+            # 拼接 logits
+            if logits is None:
+                logits = current_logits
+            else:
+                logits = torch.cat((logits, current_logits), dim=1)
 
-            current_pos += section_len
-
-        for block in self.model.layers:
-            block.self_attn.memory.clear_all()
+            # 清除缓存
+            del tok_emb_section, current_logits
+            torch.cuda.empty_cache()
 
         if targets is not None:
             if masks is not None:
                 targets[masks == 0] = -1  # 将被 mask 的位置设置为 -1
             logits = logits.reshape(-1, logits.size(-1))
-            # print("logits shape: ", logits.shape)  # logits shape:  torch.Size([126, 151936])
             targets = targets.reshape(-1)
-            # print("targets shape: ", targets.shape)  # targets shape:  torch.Size([905])
             loss = F.cross_entropy(logits, targets, ignore_index=-1)
+
+            # 清除模型层的记忆
+            for block in self.model.layers:
+                block.self_attn.memory.clear_all()
+
             return None, loss
         else:
             logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits

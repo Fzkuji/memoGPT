@@ -146,9 +146,12 @@ class MemorySelfAttention(nn.Module):
             # print("Updated short term memory")
 
         # output projection
-        y = y[:, -min(T, self.config.memory_block_size):, :]  # only take the last min(T, self.config.memory_block_size) tokens
+        y = y[:, -T:, :]  # only take the last T tokens
         y = self.resid_dropout(self.o_proj(y))
 
         return y
+
+
+
 
 
