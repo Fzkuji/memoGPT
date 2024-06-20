@@ -68,7 +68,7 @@ def collate_fn(batch, tokenizer):
 
 
 '''
-# 加载数据集
+# 加载数据集 
 dataset = load_dataset("Open-Orca/OpenOrca", split="train")
 
 # 初始化Llama的tokenizer

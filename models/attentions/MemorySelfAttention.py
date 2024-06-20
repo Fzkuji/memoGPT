@@ -35,7 +35,6 @@ class MemorySelfAttention(nn.Module):
         self.k_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
         self.v_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
 
-
         # output projection
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)  # 注意这边的bias，qwen2是False，其他模型可能会变
         # regularization
@@ -49,31 +48,24 @@ class MemorySelfAttention(nn.Module):
         self.register_buffer(
             "bias",
             create_memory_mask(
+                sum(config.long_term_memory_size),
                 config.short_term_memory_size,
-                config.input_block_size,
-                config.memory_block_size,
+                config.input_block_size + config.memory_block_size,
             )
         )
 
         # 实例化RotaryEmbedding
-        self.freqs_cis_memory = precompute_freqs_cis(
-            dim=self.config.n_embd // self.config.num_attention_heads,
-            fix_t=-config.memory_block_size,
-            end=config.input_block_size * 2,
-            theta=self.config.rope_theta,
-        ).to(config.device)
-        # print("MemorySelfAttention freqs_cis_memory shape: ", config.input_block_size)
-
-        # 实例化RotaryEmbedding
         self.freqs_cis_seq = precompute_freqs_cis(
             dim=config.n_embd // config.num_attention_heads,
-            end=config.input_block_size * 2,
+            end=config.input_block_size + config.memory_block_size + config.short_term_memory_size,
             theta=config.rope_theta,
         ).to(config.device)
 
     def forward(self, x, short_term_memory_update=False):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+
+        end_pos = self.memory.max_len + T
 
         height = self.config.short_term_memory_size + min(T, self.config.memory_block_size)
         width_point = 32768 * 2 - 1 - self.config.memory_block_size
@@ -86,10 +78,7 @@ class MemorySelfAttention(nn.Module):
         q_list, k_list, v_list = [], [], []
         for i in [short_term_memory, x]:
             # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-            if i is x and T > self.config.memory_block_size:
-                q = self.q_proj(i[:, -self.config.memory_block_size])
-            else:
-                q = self.q_proj(i)
+            q = self.q_proj(i)
             k = self.k_proj(i)
             v = self.v_proj(i)
 
@@ -97,9 +86,8 @@ class MemorySelfAttention(nn.Module):
             k_list.append(k.view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
             v_list.append(v.view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
 
-        long_q, long_k, long_v = self.memory.get_long_term_memory(B)
+        long_k, long_v = self.memory.get_long_term_memory(B)
         start_pos = self.memory.get_long_term_memory_len()
-        # long_q.extend(q_list)
         long_k.extend(k_list)
         long_v.extend(v_list)
         q = torch.cat(q_list, dim=1)
@@ -107,15 +95,22 @@ class MemorySelfAttention(nn.Module):
         v = torch.cat(long_v, dim=1)
 
         if self.long_term_memory_update:
+            # 实例化RotaryEmbedding
+            freqs_cis_memory = precompute_freqs_cis(
+                dim=self.config.n_embd // self.config.num_attention_heads,
+                fix_t=-T,
+                end=self.config.input_block_size * 2,
+                theta=self.config.rope_theta,
+            ).to(self.config.device)
+
             self.memory.update_long_term_memory(
-                q[:, :self.config.short_term_memory_size, :, :],  # q
                 k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
                 v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
-                self.freqs_cis_memory,
+                freqs_cis_memory,
             )
             self.long_term_memory_update = False
-            # print("Updated long term memory")
-
+        # print("q.shape: ", q.shape)
+        # print("freqs_cis_seq: ", self.freqs_cis_seq.shape)
         q = apply_separate_rotary_emb(q, freqs_cis=self.freqs_cis_seq[:q.shape[1]])
 
         k[:, -T - self.config.short_term_memory_size:, :, :] = apply_separate_rotary_emb(
@@ -131,10 +126,11 @@ class MemorySelfAttention(nn.Module):
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         # manual implementation of attention
-        width_start = width_end - k.size(2)
+        start_pos = end_pos - q.shape[2]
+        start_pos_2 = end_pos - k.shape[2]
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :height, width_start:width_end] == 0, float('-inf'))
+        att = att.masked_fill(self.bias[:, :, start_pos:end_pos, start_pos_2:end_pos] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -143,7 +139,6 @@ class MemorySelfAttention(nn.Module):
         if short_term_memory_update:
             self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
             self.long_term_memory_update = True
-            # print("Updated short term memory")
 
         # output projection
         y = y[:, -T:, :]  # only take the last T tokens

@@ -119,45 +119,44 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def split_sequence(self, input_sequence, section_length, ):
-
-        b, t, n_embd = input_sequence.size()
-        num_sections = math.ceil(t / section_length)
-        sections = []
-
-        for i in range(num_sections):
-            start_idx = i * section_length
-            end_idx = min((i + 1) * section_length, t)
-            section = input_sequence[:, start_idx:end_idx, :]
-            sections.append(section)
-
-        return sections
-
     def forward(self, idx, targets=None, masks=None):
 
-        batch_size, input_seq_len = idx.size()
+        batch_size, input_len = idx.size()
+        # print("batch_size: ", batch_size)
+        # print("input_len: ", input_len)
 
         # 定义 input_block_size 和 memory_block_size
         input_block_size = self.config.input_block_size  # 例如 1024
         memory_block_size = self.config.memory_block_size  # 例如 256
+        # print("input_block_size: ", input_block_size)
+        # print("memory_block_size: ", memory_block_size)
 
         if self.past_input is not None:
-            end_pos = self.past_input.size(1)
+            past_input_len = self.past_input.size(1)
+            end_pos = past_input_len
             idx = torch.cat((self.past_input, idx), dim=1)
             self.past_input = None
         else:
+            past_input_len = 0
             end_pos = 0
+
+        # print("past_input_len: ", past_input_len)
+        # print("end_pos: ", end_pos)
 
         # 嵌入所有的 tokens
         tok_emb = self.model.embed_tokens(idx)
-        del idx  # 删除不再使用的变量
-        torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
         # 准备变量
-
         logits = None
         seq_len = tok_emb.size(1)  # 序列总长度
+        # print("seq_len (length of the whole seq): ", seq_len)
 
+        # 如果是训练 targets不为空 则创建logits保存预测结果
+        if targets is not None:
+            logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device)
+
+
+        output_start_pos = 0
         while end_pos < seq_len:
 
             if self.tokens_left_to_update_memory - (seq_len - end_pos) > 0:
@@ -169,35 +168,33 @@ class GPT(nn.Module):
                 memory_update_flag = False
             else:
                 # 如果输入序列的长度大于更新记忆需要的 token 数
-                print("tokens_left_to_update_memory: ", self.tokens_left_to_update_memory)
-                predict_len = self.tokens_left_to_update_memory
+                predict_len = memory_block_size
                 end_pos = end_pos + self.tokens_left_to_update_memory
+                # print("end_pos: ", end_pos)
                 start_pos = max(end_pos - memory_block_size - input_block_size, 0)
+                # print("start_pos: ", start_pos)
                 self.tokens_left_to_update_memory = memory_block_size
+                # print("tokens_left_to_update_memory: ", self.tokens_left_to_update_memory)
                 memory_update_flag = True
-            print("start_pos: ", start_pos)
-            print("end_pos: ", end_pos)
+
+            # print("predict_len: ", predict_len)
 
             # 获取当前块的 tok_emb
-            tok_emb_section = tok_emb[:, start_pos:end_pos, :]
-            print("tok_emb_section: ", tok_emb_section.size())
+            output = tok_emb[:, start_pos:end_pos, :]
 
             # 通过模型层
             for block in self.model.layers:
-                tok_emb_section = block(tok_emb_section, memory_update_flag)
+                output = block(output, memory_update_flag)
 
             # 获取当前块的 logits
-            current_logits = self.lm_head(self.model.norm(tok_emb_section))
-
-            # 拼接 logits
-            if logits is None:
-                logits = current_logits
+            if targets is not None:
+                logits[:, output_start_pos:output_start_pos+predict_len, :] = self.lm_head(self.model.norm(output))[:, end_pos-start_pos-predict_len:, :]
+                output_start_pos += predict_len
             else:
-                logits = torch.cat((logits, current_logits), dim=1)
+                logits = self.lm_head(self.model.norm(output))[:, [-1], :]
 
-            # 清除缓存
-            del tok_emb_section, current_logits
-            torch.cuda.empty_cache()
+            del output  # 删除不再使用的变量
+            torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
         if targets is not None:
             if masks is not None:
@@ -212,17 +209,18 @@ class GPT(nn.Module):
 
             return None, loss
         else:
+            # save the past input for next iteration
+            pos = max(seq_len - self.config.memory_block_size - self.config.input_block_size + 1, 0)
+            self.past_input = idx[:, pos:, :]
+
             logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
             return logits, None
 
     @classmethod
-    def from_pretrained(cls, model_type, override_args=None):
+    def from_pretrained(cls, model_type, override_args):
         if "gpt2" in model_type:
             pass
         elif "Qwen" in model_type:
-            override_args = override_args or {}  # default to empty dict
-            # only dropout can be overridden see more notes below
-            assert all(k == 'dropout' for k in override_args)
             from transformers import Qwen2ForCausalLM
             print("loading weights from pretrained Qwen2: %s" % model_type)
 
@@ -236,14 +234,15 @@ class GPT(nn.Module):
                                                intermediate_size=18944, vocab_size=152064),
             }[model_type]
             print("forcing input_block_size=32768, bias=True")
-            config_args['input_block_size'] = 1024  # always 1024 for GPT model checkpoints
             config_args['bias'] = True  # always True for GPT model checkpoints
-            # we can override the dropout rate, if desired
-            if 'dropout' in override_args:
-                print(f"overriding dropout rate to {override_args['dropout']}")
-                config_args['dropout'] = override_args['dropout']
+            # add all args from override_args to config_args
+            override_args.update(config_args)
+
+            # 过滤掉不需要的参数
+            override_args = {k: v for k, v in override_args.items() if k in GPTConfig.__dataclass_fields__.keys()}
+
             # create a from-scratch initialized minGPT model
-            config = GPTConfig(**config_args)
+            config = GPTConfig(**override_args)
             model = GPT(config)
 
             # # print all state_dict shape

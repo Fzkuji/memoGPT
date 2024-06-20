@@ -100,8 +100,7 @@ if config.init_from == 'scratch':
     model = GPT(gptconf)
 elif config.init_from.startswith('Qwen') or config.init_from.startswith('meta'):
     print(f"Initializing from {config.init_from} weights")
-    override_args = dict(dropout=config.dropout)
-    model = GPT.from_pretrained(config.init_from, override_args)
+    model = GPT.from_pretrained(config.init_from, config_dict)
     # read off the created configs params, so we can store them into checkpoint correctly
     model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
 elif config.init_from == 'resume':
@@ -200,47 +199,47 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # # evaluate the loss on train/val sets and write checkpoints
-    # if iter_num % config.eval_interval == 0 and master_process:
-    #     losses = estimate_loss(
-    #         config,
-    #         model,
-    #         ctx,
-    #         device,
-    #         device_type,
-    #         iter_num,
-    #         dataiter=val_iter if config.train_mode == 'sft' else None
-    #     )
-    #     print(
-    #         f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
-    #     if config.wandb_log:
-    #         wandb.log({
-    #             "iter": iter_num,
-    #             "train/loss": losses['train'],
-    #             "val/loss": losses['val'],
-    #             "train/perplexity": losses['train_perplexity'],
-    #             "val/perplexity": losses['val_perplexity'],
-    #             "lr": lr,
-    #             "mfu": running_mfu * 100,  # convert to percentage
-    #         })
-    #     if losses['val'] < best_val_loss or config.always_save_checkpoint:
-    #         best_val_loss = losses['val']
-    #         if iter_num > 0:
-    #             checkpoint = {
-    #                 'model': raw_model.state_dict(),
-    #                 'optimizer': optimizer.state_dict(),
-    #                 'model_args': model_args,
-    #                 'iter_num': iter_num,
-    #                 'best_val_loss': best_val_loss,
-    #                 'configs': config_dict,
-    #             }
-    #             print(f"saving checkpoint to {config.out_dir}")
-    #             if losses['val'] < best_val_loss:
-    #                 torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
-    #             elif config.always_save_checkpoint:
-    #                 torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
-    # if iter_num == 0 and config.eval_only:
-    #     break
+    # evaluate the loss on train/val sets and write checkpoints
+    if iter_num % config.eval_interval == 0 and master_process:
+        losses = estimate_loss(
+            config,
+            model,
+            ctx,
+            device,
+            device_type,
+            iter_num,
+            dataiter=val_iter if config.train_mode == 'sft' else None
+        )
+        print(
+            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
+        if config.wandb_log:
+            wandb.log({
+                "iter": iter_num,
+                "train/loss": losses['train'],
+                "val/loss": losses['val'],
+                "train/perplexity": losses['train_perplexity'],
+                "val/perplexity": losses['val_perplexity'],
+                "lr": lr,
+                "mfu": running_mfu * 100,  # convert to percentage
+            })
+        if losses['val'] < best_val_loss or config.always_save_checkpoint:
+            best_val_loss = losses['val']
+            if iter_num > 0:
+                checkpoint = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'model_args': model_args,
+                    'iter_num': iter_num,
+                    'best_val_loss': best_val_loss,
+                    'configs': config_dict,
+                }
+                print(f"saving checkpoint to {config.out_dir}")
+                if losses['val'] < best_val_loss:
+                    torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
+                elif config.always_save_checkpoint:
+                    torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+    if iter_num == 0 and config.eval_only:
+        break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16

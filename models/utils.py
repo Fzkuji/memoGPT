@@ -127,13 +127,22 @@ def precompute_memory_freqs_cis(ranges: dict, dim: int):
     return freqs_concatenated
 
 
-def create_memory_mask(short_term_memory_size, input_block_size, memory_block_size, max_position_embeddings=32768):
-    input_height = input_block_size + memory_block_size
-    mask_height = short_term_memory_size + input_block_size + memory_block_size
-    width = max_position_embeddings * 2  # max_position_embeddings = 32768
+def create_memory_mask(long_term_memory_size, short_term_memory_size, block_size):
+    mask_size = long_term_memory_size + short_term_memory_size + block_size
     # Create a mask that is 1 in the lower left triangle and 0 in the upper right triangle
-    memory_mask = torch.ones(short_term_memory_size, width)
-    input_mask = torch.tril(torch.ones(input_height, width), diagonal=1)
+    mask = torch.tril(torch.ones(mask_size, mask_size))
     # Set the memory to 1
-    mask = torch.cat([memory_mask, input_mask], dim=0)
-    return mask.view(1, 1, mask_height, -1)
+    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :] = 1
+    return mask.view(1, 1, mask_size, mask_size)
+
+
+# def create_memory_mask(short_term_memory_size, input_block_size, memory_block_size, max_position_embeddings=32768):
+#     input_height = input_block_size + memory_block_size
+#     mask_height = short_term_memory_size + input_block_size + memory_block_size
+#     width = max_position_embeddings * 2  # max_position_embeddings = 32768
+#     # Create a mask that is 1 in the lower left triangle and 0 in the upper right triangle
+#     memory_mask = torch.ones(short_term_memory_size, width)
+#     input_mask = torch.tril(torch.ones(input_height, width), diagonal=1)
+#     # Set the memory to 1
+#     mask = torch.cat([memory_mask, input_mask], dim=0)
+#     return mask.view(1, 1, mask_height, -1)

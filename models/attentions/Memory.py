@@ -111,23 +111,21 @@ class MemoryQueue(nn.Module):
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims  # Dimensions of the tensor you expect to store
-        self.queue_q = []  # Max: torch.zeros(max_batch_size, capacity, *tensor_dims)
+        # self.queue_q = []  # Max: torch.zeros(max_batch_size, capacity, *tensor_dims)
         self.queue_k = []  # Max: torch.zeros(max_batch_size, capacity, *tensor_dims)
         self.queue_v = []
         self.index = 0
 
-    def push(self, tensor_q, tensor_k, tensor_v):
+    def push(self, tensor_k, tensor_v):
         """ Add a tensor to the queue """
         bsz, seqlen, *dim = tensor_k.shape  # bsz: batch size, seqlen: sequence length
         if bsz != self.batch_size:
             self.clear()
 
-        self.queue_q.append(tensor_q.detach())
         self.queue_k.append(tensor_k.detach())
         self.queue_v.append(tensor_v.detach())
 
-        if len(self.queue_q) > self.capacity:
-            self.queue_q.pop(0)
+        if len(self.queue_k) > self.capacity:
             self.queue_k.pop(0)
             self.queue_v.pop(0)
             self.index += 1
@@ -139,24 +137,23 @@ class MemoryQueue(nn.Module):
             return False
 
     def update_rotary_emb(self, freqs_cis):
-        if self.queue_q is None:
+        if self.queue_k is None:
             return
-        for i in range(len(self.queue_q)):
-            k, v = apply_rotary_emb(self.queue_k[i], self.queue_v[i], freqs_cis[0:self.queue_q[i].shape[1]])
+        for i in range(len(self.queue_k)):
+            k, v = apply_rotary_emb(self.queue_k[i], self.queue_v[i], freqs_cis[0:self.queue_k[i].shape[1]])
             self.queue_k[i], self.queue_v[i] = k, v
 
     def get_all(self, batch_size=0):
         """ Return a tensor containing all elements in the queue """
-        if self.queue_q and batch_size != self.queue_q[0].shape[0]:
+        if self.queue_k and batch_size != self.queue_k[0].shape[0]:
             self.clear()
-        return self.queue_q, self.queue_k, self.queue_v
+        return self.queue_k, self.queue_v
 
     def get_len(self):
-        return len(self.queue_q)
+        return len(self.queue_k)
 
     def clear(self):
         """ Clear the queue """
-        self.queue_q = []
         self.queue_k = []
         self.queue_v = []
         self.index = 0
@@ -182,12 +179,12 @@ class Memory(nn.Module):
         # Initialize the short-term memory with MemoryQueue
         self.short_term_memory = MemoryPool(self.config, config.short_term_memory_size, config.n_embd, max_batch_size=config.max_batch_size)
 
-    def update_long_term_memory(self, tensor_q, tensor_k, tensor_v, freqs_cis):
+    def update_long_term_memory(self, tensor_k, tensor_v, freqs_cis):
         for memory in self.long_term_memory:
             memory.update_rotary_emb(freqs_cis)
         for memory in self.long_term_memory:
-            if tensor_q is not None:
-                carry_over = memory.push(tensor_q.detach(), tensor_k.detach(), tensor_v.detach())
+            if tensor_k is not None:
+                carry_over = memory.push(tensor_k.detach(), tensor_v.detach())
                 if not carry_over:
                     break
         torch.cuda.empty_cache()
@@ -197,17 +194,15 @@ class Memory(nn.Module):
         torch.cuda.empty_cache()
 
     def get_long_term_memory(self, batch_size):
-        all_q = []
         all_k = []
         all_v = []
 
         for memory in self.long_term_memory[::-1]:
-            q, k, v = memory.get_all(batch_size)
-            all_q.extend(q)
+            k, v = memory.get_all(batch_size)
             all_k.extend(k)
             all_v.extend(v)
 
-        return all_q, all_k, all_v
+        return all_k, all_v
 
     def get_long_term_memory_len(self):
         return sum([memory.get_len() for memory in self.long_term_memory]) * self.short_term_memory.capacity
