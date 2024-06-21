@@ -8,8 +8,8 @@ seed = 1337
 
 # 输出和日志
 out_dir = 'out-owt'
-eval_interval = 500
-eval_iters = 100
+eval_interval = 200
+eval_iters = 200
 eval_only = False
 
 log_interval = 10
@@ -29,7 +29,7 @@ always_save_checkpoint = False  # Only save checkpoints if the validation loss i
 batch_size = 1
 gradient_accumulation_steps = 16
 max_iters = 600000
-lr_decay_iters = 100000
+lr_decay_iters = 600000
 warmup_iters = 200  # how many steps to warm up for
 
 # 模型参数
@@ -45,8 +45,8 @@ bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
 input_block_size = 128
 memory_block_size = 128
-train_size_ratio = 16  # 32
-val_size_ratio = 16  # Need 22GB per 1024 * 1024 tokens long context
+train_size_ratio = 56  # 32
+val_size_ratio = 56  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 

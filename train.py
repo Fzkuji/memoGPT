@@ -57,7 +57,7 @@ else:
     master_process = True
     seed_offset = 0
     ddp_world_size = 1
-tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.input_block_size
+tokens_per_iter = config.gradient_accumulation_steps * ddp_world_size * config.batch_size * config.train_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
@@ -223,7 +223,6 @@ while True:
                 "mfu": running_mfu * 100,  # convert to percentage
             })
         if losses['val'] < best_val_loss or config.always_save_checkpoint:
-            best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
@@ -233,11 +232,13 @@ while True:
                     'best_val_loss': best_val_loss,
                     'configs': config_dict,
                 }
-                print(f"saving checkpoint to {config.out_dir}")
                 if losses['val'] < best_val_loss:
+                    print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
                     torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
                 elif config.always_save_checkpoint:
+                    print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
                     torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+            best_val_loss = losses['val']
     if iter_num == 0 and config.eval_only:
         break
 
