@@ -211,7 +211,7 @@ class GPT(nn.Module):
         else:
             # save the past input for next iteration
             pos = max(seq_len - self.config.memory_block_size - self.config.input_block_size + 1, 0)
-            self.past_input = idx[:, pos:, :]
+            self.past_input = idx[:, pos:]
 
             logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
             return logits, None
@@ -257,6 +257,7 @@ class GPT(nn.Module):
             # init a huggingface/transformers model
             model_hf = Qwen2ForCausalLM.from_pretrained(
                 model_type,
+                cache_dir='.cache/huggingface/hub',
             )
             sd_hf = model_hf.state_dict()
 
@@ -342,9 +343,6 @@ class GPT(nn.Module):
             idx = enc.encode(idx, add_special_tokens=False)
             idx = torch.tensor(idx).unsqueeze(0).to(self.config.device)
 
-        B, T = idx.size()
-        block_size = self.config.memory_block_size
-
         from transformers import AutoTokenizer
         if eos_token_id is None:
             enc = AutoTokenizer.from_pretrained(
@@ -352,61 +350,28 @@ class GPT(nn.Module):
             )
             eos_token_id = enc.convert_tokens_to_ids(enc.pad_token)
 
-        # Initialize memory by processing the initial blocks except the last one
-        current_pos = 0
-        while current_pos + block_size < T:
-            idx_cond = idx[:, current_pos:current_pos + block_size]
+        idx_cond = idx
+
+        print("idx shape: ", idx.shape)
+
+        for _ in range(max_new_tokens):
+            # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
-            current_pos += block_size
-
-        # Process the last block with special strategy
-        index = min(current_pos, T - block_size)
-        index = max(0, index)
-        idx_cond = idx[:, index:]
-        m = idx_cond.size(1)
-        index = m - 1
-        gen_len = 0
-
-        while True:
-            # Generate one token at a time until the length exceeds block size
-            if index >= block_size:
-                index = index - block_size
-                idx_cond = idx_cond[:, -(block_size - 1):]  # Keep the last input_block_size - 1 tokens
-
-            # Forward the model to get the logits for the last index in the sequence
-            logits, _ = self(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
-
-            # Optionally crop the logits to only the top k options
+            # optionally crop the logits to only the top k options
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
-
-            # Apply softmax to convert logits to (normalized) probabilities
+            # apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
-
-            # Sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1).to(self.config.device)
-
-            # Append sampled index to the running sequence
-            idx_cond = torch.cat((idx_cond, idx_next), dim=1)
-            if idx_cond.size(1) > block_size:
-                idx_cond = idx_cond[:, 1:]
-            index += 1
-
-            # # Print the generated token for demonstration purposes
-            # print(idx_next.item())
+            # sample from the distribution
+            idx_cond = torch.multinomial(probs, num_samples=1)
+            # append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_cond), dim=1)
 
             # If the generated token is the eos_token_id, stop generating
-            if idx_next.item() == eos_token_id:
-                break
-
-            # Keep generating tokens indefinitely
-            idx = torch.cat((idx, idx_next), dim=1)
-
-            gen_len += 1
-
-            if (max_new_tokens is not None and gen_len >= max_new_tokens) or gen_len > 1024:
+            if idx_cond.item() == eos_token_id:
                 break
 
         if output_type == "str":

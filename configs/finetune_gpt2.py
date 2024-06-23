@@ -9,7 +9,7 @@ seed = 1337
 # 输出和日志
 out_dir = 'out-owt'
 eval_interval = 200
-eval_iters = 200
+eval_iters = 100
 eval_only = False
 
 log_interval = 10
@@ -20,7 +20,7 @@ wandb_run_name = 'ft-' + str(time.time())
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
 train_mode = 'pretrain'  # pretrain, sft
-init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
+init_from = 'resume'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
@@ -28,8 +28,8 @@ always_save_checkpoint = False  # Only save checkpoints if the validation loss i
 # 训练参数
 batch_size = 1
 gradient_accumulation_steps = 16
-max_iters = 600000
-lr_decay_iters = 600000
+max_iters = 60000
+lr_decay_iters = 10000
 warmup_iters = 200  # how many steps to warm up for
 
 # 模型参数
@@ -51,7 +51,7 @@ train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 
 # 优化器参数
-learning_rate = 8e-5
+learning_rate = 4e-5
 decay_lr = True
 min_lr = 1e-6
 

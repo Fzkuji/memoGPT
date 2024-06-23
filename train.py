@@ -98,6 +98,7 @@ if config.init_from == 'scratch':
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
+    model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
 elif config.init_from.startswith('Qwen') or config.init_from.startswith('meta'):
     print(f"Initializing from {config.init_from} weights")
     model = GPT.from_pretrained(config.init_from, config_dict)
@@ -123,6 +124,8 @@ elif config.init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+
+    model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
 else:
     raise ValueError(f"Unsupported init_from: {config.init_from}")
 
@@ -161,7 +164,11 @@ if config.train_mode == 'pretrain':
 
 elif config.train_mode == 'sft':
     # 加载数据集
-    dataset = load_dataset("Open-Orca/OpenOrca", split="train")
+    dataset = load_dataset(
+        "Open-Orca/OpenOrca",
+        split="train",
+        cache_dir='.cache/huggingface/datasets',
+    )
     train_valtest = dataset.train_test_split(test_size=0.2, seed=config.seed)
     val_test = train_valtest['test'].train_test_split(test_size=0.5, seed=config.seed)
     dataset = DatasetDict({
@@ -170,7 +177,9 @@ elif config.train_mode == 'sft':
         'test': val_test['test'],
     })
     # 初始化Llama的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(
+        "Qwen/Qwen2-0.5B-Instruct"
+    )
 
     # 创建数据集和DataLoader
     train_dataset = CustomDataset(dataset['train'], tokenizer)

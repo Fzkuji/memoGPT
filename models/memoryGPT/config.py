@@ -40,6 +40,34 @@ class GPTConfig:
 
     init_from: str = 'Qwen/Qwen2-0.5B-Instruct'
 
+    def to_dict(self):
+        return {
+            "max_batch_size": self.max_batch_size,
+            "short_term_memory_size": self.short_term_memory_size,
+            "long_term_memory_layer": self.long_term_memory_layer,
+            "long_term_memory_chunk_size": self.long_term_memory_chunk_size,
+            "long_term_memory_size": self.long_term_memory_size,
+            "rope_theta": self.rope_theta,
+            "rms_norm_eps": self.rms_norm_eps,
+            "input_block_size": self.input_block_size,
+            "memory_block_size": self.memory_block_size,
+            "vocab_size": self.vocab_size,
+            "n_layer": self.n_layer,
+            "num_attention_heads": self.num_attention_heads,
+            "num_key_value_heads": self.num_key_value_heads,
+            "use_moe": self.use_moe,
+            "n_expert": self.n_expert,
+            "n_expert_per_tok": self.n_expert_per_tok,
+            "n_embd": self.n_embd,
+            "intermediate_size": self.intermediate_size,
+            "hidden_act": self.hidden_act,
+            "dropout": self.dropout,
+            "bias": self.bias,
+            "device": self.device,
+            "init_from": self.init_from,
+            "model_type": "gpt",  # 添加模型类型
+        }
+
 
 @dataclass
 class TrainConfig(GPTConfig):
