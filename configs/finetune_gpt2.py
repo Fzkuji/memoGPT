@@ -43,15 +43,17 @@ num_key_value_heads = 2
 short_term_memory_size = 8
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 128
+input_block_size = 256
 memory_block_size = 128
-train_size_ratio = 56  # 32
-val_size_ratio = 56  # Need 22GB per 1024 * 1024 tokens long context
+train_size_ratio = 32  # 32
+val_size_ratio = 32  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 
+rope_theta = 1000000.0
+
 # 优化器参数
-learning_rate = 4e-5
+learning_rate = 8e-5
 decay_lr = True
 min_lr = 1e-6
 

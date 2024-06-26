@@ -31,9 +31,6 @@ train_config_fields = {field.name for field in fields(TrainConfig)}
 filtered_config_dict = {k: v for k, v in config_dict.items() if k in train_config_fields}
 config = TrainConfig(**filtered_config_dict)
 
-# 现在可以使用 config.参数名 来访问配置了
-print(config)
-
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1  # is this a ddp run?
 if ddp:
@@ -104,6 +101,7 @@ elif config.init_from.startswith('Qwen') or config.init_from.startswith('meta'):
     model = GPT.from_pretrained(config.init_from, config_dict)
     # read off the created configs params, so we can store them into checkpoint correctly
     model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
+
 elif config.init_from == 'resume':
     print(f"Resuming training from {config.out_dir}")
     # resume training from a checkpoint.
@@ -126,10 +124,19 @@ elif config.init_from == 'resume':
     best_val_loss = checkpoint['best_val_loss']
 
     model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
+
 else:
     raise ValueError(f"Unsupported init_from: {config.init_from}")
 
+# use model.config to update the config object
+for k, v in model_args.items():
+    setattr(config, k, v)
+# 现在可以使用 config.参数名 来访问配置了
+print(config)
+
 model.to(device)
+
+print(model)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(config.dtype == 'float16'))
@@ -208,48 +215,48 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % config.eval_interval == 0 and master_process:
-        losses = estimate_loss(
-            config,
-            model,
-            ctx,
-            device,
-            device_type,
-            iter_num,
-            dataiter=val_iter if config.train_mode == 'sft' else None
-        )
-        print(
-            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
-        if config.wandb_log:
-            wandb.log({
-                "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "train/perplexity": losses['train_perplexity'],
-                "val/perplexity": losses['val_perplexity'],
-                "lr": lr,
-                "mfu": running_mfu * 100,  # convert to percentage
-            })
-        if losses['val'] < best_val_loss or config.always_save_checkpoint:
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'configs': config_dict,
-                }
-                if losses['val'] < best_val_loss:
-                    print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
-                    torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
-                elif config.always_save_checkpoint:
-                    print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
-                    torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
-            best_val_loss = losses['val']
-    if iter_num == 0 and config.eval_only:
-        break
+    # # evaluate the loss on train/val sets and write checkpoints
+    # if iter_num % config.eval_interval == 0 and master_process:
+    #     losses = estimate_loss(
+    #         config,
+    #         model,
+    #         ctx,
+    #         device,
+    #         device_type,
+    #         iter_num,
+    #         dataiter=val_iter if config.train_mode == 'sft' else None
+    #     )
+    #     print(
+    #         f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
+    #     if config.wandb_log:
+    #         wandb.log({
+    #             "iter": iter_num,
+    #             "train/loss": losses['train'],
+    #             "val/loss": losses['val'],
+    #             "train/perplexity": losses['train_perplexity'],
+    #             "val/perplexity": losses['val_perplexity'],
+    #             "lr": lr,
+    #             "mfu": running_mfu * 100,  # convert to percentage
+    #         })
+    #     if losses['val'] < best_val_loss or config.always_save_checkpoint:
+    #         if iter_num > 0:
+    #             checkpoint = {
+    #                 'model': raw_model.state_dict(),
+    #                 'optimizer': optimizer.state_dict(),
+    #                 'model_args': model_args,
+    #                 'iter_num': iter_num,
+    #                 'best_val_loss': best_val_loss,
+    #                 'configs': config_dict,
+    #             }
+    #             if losses['val'] < best_val_loss:
+    #                 print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
+    #                 torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
+    #                 best_val_loss = losses['val']
+    #             if config.always_save_checkpoint:
+    #                 print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
+    #                 torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+    # if iter_num == 0 and config.eval_only:
+    #     break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -261,6 +268,8 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == config.gradient_accumulation_steps - 1)
         with ctx:
+            # mask = torch.zeros((config.batch_size, config.train_size), dtype=torch.bool, device=device)
+            # mask[:, -config.memory_block_size:] = 1
             _, loss = model(X, Y, masks=masks)
             loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
 

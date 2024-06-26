@@ -50,7 +50,8 @@ class MemorySelfAttention(nn.Module):
             create_memory_mask(
                 sum(config.long_term_memory_size),
                 config.short_term_memory_size,
-                config.input_block_size + config.memory_block_size,
+                config.input_block_size,
+                config.memory_block_size,
             )
         )
 
@@ -66,10 +67,6 @@ class MemorySelfAttention(nn.Module):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         end_pos = self.memory.max_len + T
-
-        height = self.config.short_term_memory_size + min(T, self.config.memory_block_size)
-        width_point = 32768 * 2 - 1 - self.config.memory_block_size
-        width_end = width_point + min(T, self.config.memory_block_size)
 
         short_term_memory = self.memory.short_term_memory.get_all(B)
 

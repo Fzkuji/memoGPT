@@ -84,7 +84,7 @@ class GPT(nn.Module):
 
         ))
         # 输出wte支持的最大输入
-        print("wte max: ", self.model.embed_tokens.num_embeddings)
+        print("prediction vocabulary size: ", self.model.embed_tokens.num_embeddings)
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
@@ -132,12 +132,10 @@ class GPT(nn.Module):
         # print("memory_block_size: ", memory_block_size)
 
         if self.past_input is not None:
-            past_input_len = self.past_input.size(1)
-            end_pos = past_input_len
+            end_pos = self.past_input.size(1)
             idx = torch.cat((self.past_input, idx), dim=1)
             self.past_input = None
         else:
-            past_input_len = 0
             end_pos = 0
 
         # print("past_input_len: ", past_input_len)
@@ -154,7 +152,6 @@ class GPT(nn.Module):
         # 如果是训练 targets不为空 则创建logits保存预测结果
         if targets is not None:
             logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device)
-
 
         output_start_pos = 0
         while end_pos < seq_len:
@@ -181,20 +178,19 @@ class GPT(nn.Module):
 
             # 获取当前块的 tok_emb
             output = tok_emb[:, start_pos:end_pos, :]
+            # print("output shape: ", output.shape)
 
             # 通过模型层
             for block in self.model.layers:
                 output = block(output, memory_update_flag)
 
             # 获取当前块的 logits
+            # if end_pos == seq_len:
             if targets is not None:
                 logits[:, output_start_pos:output_start_pos+predict_len, :] = self.lm_head(self.model.norm(output))[:, end_pos-start_pos-predict_len:, :]
                 output_start_pos += predict_len
             else:
                 logits = self.lm_head(self.model.norm(output))[:, [-1], :]
-
-            del output  # 删除不再使用的变量
-            torch.cuda.empty_cache()  # 清除未使用的缓存内存
 
         if targets is not None:
             if masks is not None:
@@ -222,7 +218,7 @@ class GPT(nn.Module):
             pass
         elif "Qwen" in model_type:
             from transformers import Qwen2ForCausalLM
-            print("loading weights from pretrained Qwen2: %s" % model_type)
+            print(f"loading weights from pretrained {model_type}")
 
             # n_layer, n_head and n_embd are determined from model_type
             config_args = {
@@ -233,7 +229,6 @@ class GPT(nn.Module):
                 'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
                                                intermediate_size=18944, vocab_size=152064),
             }[model_type]
-            print("forcing input_block_size=32768, bias=True")
             config_args['bias'] = True  # always True for GPT model checkpoints
             # add all args from override_args to config_args
             override_args.update(config_args)
@@ -257,7 +252,7 @@ class GPT(nn.Module):
             # init a huggingface/transformers model
             model_hf = Qwen2ForCausalLM.from_pretrained(
                 model_type,
-                cache_dir='.cache/huggingface/hub',
+                # cache_dir='.cache/huggingface/hub',
             )
             sd_hf = model_hf.state_dict()
 
@@ -327,7 +322,7 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens=None, eos_token_id=None, temperature=1.0, top_k=None, output_type="str"):
+    def generate(self, idx, max_new_tokens=100, eos_token_id=None, temperature=1.0, top_k=None, output_type="str"):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
@@ -352,7 +347,7 @@ class GPT(nn.Module):
 
         idx_cond = idx
 
-        print("idx shape: ", idx.shape)
+        # print("idx shape: ", idx.shape)
 
         for _ in range(max_new_tokens):
             # forward the model to get the logits for the index in the sequence
@@ -379,6 +374,6 @@ class GPT(nn.Module):
             enc = AutoTokenizer.from_pretrained(
                 self.config.init_from,
             )
-            return enc.decode(idx[0].tolist())
+            return enc.decode(idx[0])
 
         return idx

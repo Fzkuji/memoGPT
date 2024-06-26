@@ -91,7 +91,10 @@ for batch in dataloader:
 '''
 
 
-def pretraining_get_batch(config, split, context_len, device, device_type):
+def pretraining_get_batch(config, split, context_len, device, device_type, validation=False):
+    # randomize the context length from 0 to context_len
+    # if not validation:
+    #     context_len = np.random.randint(1, context_len + 1)
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
@@ -109,14 +112,15 @@ def pretraining_get_batch(config, split, context_len, device, device_type):
     return x, y
 
 
-def get_batch(config, device, device_type, data_iter=None):
+def get_batch(config, device, device_type, data_iter=None, validation=False):
     if config.train_mode == 'pretrain':
         X, Y = pretraining_get_batch(
             config,
             'train',
             config.train_size,
             device,
-            device_type
+            device_type,
+            validation=validation,
         )  # fetch the very first batch
         masks = None
     elif config.train_mode == 'sft':

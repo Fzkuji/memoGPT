@@ -17,7 +17,7 @@ def estimate_loss(config, model, ctx, device, device_type, iter_num, dataiter=No
             if iter_num > 0 and iter_num % 10000 == 0 and split == 'val':
                 context_len *= 16
 
-            input_x, label_y, masks = get_batch(config, device, device_type, data_iter=dataiter)
+            input_x, label_y, masks = get_batch(config, device, device_type, data_iter=dataiter, validation=True)
 
             with ctx:
                 # # Calculate the time it takes to evaluate the loss
@@ -28,6 +28,7 @@ def estimate_loss(config, model, ctx, device, device_type, iter_num, dataiter=No
                     label_y,
                     masks=masks
                 )
+                torch.cuda.empty_cache()  # 清除未使用的缓存内存
                 # print(f"Time taken to evaluate loss: {time.time() - start}")
             losses[k] = loss.item()
         out[split] = losses.mean()
