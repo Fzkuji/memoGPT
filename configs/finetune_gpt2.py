@@ -45,8 +45,8 @@ bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
 input_block_size = 256
 memory_block_size = 128
-train_size_ratio = 32  # 32
-val_size_ratio = 32  # Need 22GB per 1024 * 1024 tokens long context
+train_size_ratio = 4  # 32
+val_size_ratio = 128  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 

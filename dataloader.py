@@ -112,12 +112,12 @@ def pretraining_get_batch(config, split, context_len, device, device_type, valid
     return x, y
 
 
-def get_batch(config, device, device_type, data_iter=None, validation=False):
+def get_batch(config, device, device_type, split='train', data_iter=None, validation=False):
     if config.train_mode == 'pretrain':
         X, Y = pretraining_get_batch(
             config,
-            'train',
-            config.train_size,
+            split,
+            config.train_size if split == 'train' else config.val_size,
             device,
             device_type,
             validation=validation,

@@ -119,7 +119,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, masks=None):
+    def forward(self, idx, targets=None, masks=None, cal_segment_loss=False):
 
         batch_size, input_len = idx.size()
         # print("batch_size: ", batch_size)
@@ -199,11 +199,24 @@ class GPT(nn.Module):
             targets = targets.reshape(-1)
             loss = F.cross_entropy(logits, targets, ignore_index=-1)
 
+            # print("logits shape: ", logits.shape)
+            # print("targets shape: ", targets.shape)
+
+            # 计算 segment_loss
+            if cal_segment_loss:
+                segment_loss = []
+                for i in range(input_len//memory_block_size):
+                    segment_loss.append(F.cross_entropy(logits[i*memory_block_size:(i+1)*memory_block_size, :], targets[i*memory_block_size:(i+1)*memory_block_size], ignore_index=-1))
+                # concert segment_losses to tensor
+                segment_loss = torch.stack(segment_loss)
+            else:
+                segment_loss = None
+
             # 清除模型层的记忆
             for block in self.model.layers:
                 block.self_attn.memory.clear_all()
 
-            return None, loss
+            return None, loss, segment_loss if cal_segment_loss else None
         else:
             # save the past input for next iteration
             pos = max(seq_len - self.config.memory_block_size - self.config.input_block_size + 1, 0)
@@ -252,7 +265,7 @@ class GPT(nn.Module):
             # init a huggingface/transformers model
             model_hf = Qwen2ForCausalLM.from_pretrained(
                 model_type,
-                # cache_dir='.cache/huggingface/hub',
+                cache_dir='.cache/huggingface/hub',
             )
             sd_hf = model_hf.state_dict()
 
