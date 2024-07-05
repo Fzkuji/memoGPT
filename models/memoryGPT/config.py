@@ -14,7 +14,7 @@ class GPTConfig:
     long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
                              [short_term_memory_size * (long_term_memory_chunk_size - 1)])
 
-    rope_theta: float = 500000
+    rope_theta: int = 500000
     rms_norm_eps: float = 1e-6
 
     input_block_size: int = 1024
@@ -39,6 +39,7 @@ class GPTConfig:
     device: str = 'cuda'
 
     init_from: str = 'Qwen/Qwen2-0.5B-Instruct'
+    torch_dtype: str = "bfloat16"
 
     def to_dict(self):
         return {

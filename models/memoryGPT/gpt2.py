@@ -290,11 +290,11 @@ class GPT(nn.Module):
             # n_layer, n_head and n_embd are determined from model_type
             config_args = {
                 'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, num_attention_heads=14, num_key_value_heads=2, n_embd=896,
-                                                 intermediate_size=4864, vocab_size=151936),
+                                                 intermediate_size=4864, vocab_size=151936, torch_dtype=torch.bfloat16),
                 'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=28, num_attention_heads=12, num_key_value_heads=2, n_embd=1536,
-                                                 intermediate_size=8960, vocab_size=151936),
+                                                 intermediate_size=8960, vocab_size=151936, torch_dtype=torch.bfloat16),
                 'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
-                                               intermediate_size=18944, vocab_size=152064),
+                                               intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16),
             }[model_type]
             config_args['bias'] = True  # always True for GPT model checkpoints
             # add all args from override_args to config_args
@@ -306,6 +306,9 @@ class GPT(nn.Module):
             # create a from-scratch initialized minGPT model
             config = GPTConfig(**override_args)
             model = GPT(config)
+
+            # change model dtype to torch_dtype
+            model = model.to(config.torch_dtype)
 
             # # print all state_dict shape
             # for key in model.state_dict().keys():
