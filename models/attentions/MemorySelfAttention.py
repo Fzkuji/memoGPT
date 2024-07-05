@@ -116,12 +116,8 @@ class MemorySelfAttention(nn.Module):
                 kv_seq_len = k.shape[-2]
 
                 cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
-                position_ids = torch.arange(kv_seq_len, device=x.device).expand(B, kv_seq_len)
-                query_states, key_states = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
-
-                q, k = apply_rotary_emb(q, k, self.freqs_cis_seq[:q.shape[1]])
-
-
+                position_ids = torch.arange(self.config.short_term_memory_size, device=x.device).unsqueeze(0)
+                q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
                 # repeat k/v heads if n_kv_heads < n_heads
                 k = repeat_kv(k, self.num_key_value_groups)
