@@ -51,12 +51,18 @@ class MemoryPool(nn.Module):
 
     def __init__(self, config, capacity, *tensor_dims, max_batch_size=64):
         super(MemoryPool, self).__init__()
+        self.pool = None
+        self.config = config
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims
         # initialize the pool with zeros
-        self.pool = torch.zeros(max_batch_size, capacity, *tensor_dims)
-        self.pool = self.pool.to(config.device)
+        # self.pool = torch.zeros(max_batch_size, capacity, *tensor_dims)
+
+        # initialize the pool with normal distribution
+        # self.pool = torch.randn(max_batch_size, capacity, *tensor_dims)
+        #
+        # self.pool = self.pool.to(config.device)
         # self.pool_k = torch.zeros(max_batch_size, capacity, *tensor_dims)
         # self.pool_v = torch.zeros(max_batch_size, capacity, *tensor_dims)
 
@@ -69,7 +75,9 @@ class MemoryPool(nn.Module):
     def get_len(self):
         return self.capacity
 
-    # def update(self, tensor_q, tensor_k, tensor_v):
+    def init(self, pool):
+        self.pool = pool.to(self.config.device)
+
     def update(self, tensor):
         """ Update the pool with a new tensor """
         # assert tensor_q.shape == tensor_k.shape == tensor_v.shape, "All tensors should have the same shape"
@@ -84,7 +92,8 @@ class MemoryPool(nn.Module):
 
     def clear(self):
         """ Clear the pool """
-        self.pool.fill_(0)  # Efficient way to reset all elements to zero
+        self.pool = None
+        # self.pool.fill_(0)  # Efficient way to reset all elements to zero
         # self.pool_k.fill_(0)
         # self.pool_v.fill_(0)
 
@@ -187,6 +196,10 @@ class Memory(nn.Module):
                 carry_over = memory.push(tensor_k.detach(), tensor_v.detach())
                 if not carry_over:
                     break
+        torch.cuda.empty_cache()
+
+    def init_short_term_memory(self, tensor):
+        self.short_term_memory.init(tensor.detach())
         torch.cuda.empty_cache()
 
     def update_short_term_memory(self, tensor):

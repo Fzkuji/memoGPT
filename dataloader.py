@@ -21,7 +21,7 @@ class CustomDataset(Dataset):
         response = row['response']
 
         input_text = question + response
-        output_text = question + response + ' ' + self.tokenizer.eos_token
+        output_text = question + response + ' ' + self.tokenizer.pad_token
 
         input_ids = self.tokenizer.encode(input_text)
         output_ids = self.tokenizer.encode(output_text)[1:]  # 去掉第一个token
@@ -56,9 +56,10 @@ def collate_fn(batch, tokenizer):
         # Create mask: 0 for question part, 1 for response part, 0 for padding and eos_token part
         mask = [0] * q_len + [1] * (output_len - q_len) + [0] * (max_len - output_len)
 
-        input_ids_padded.append(input_ids)
-        output_ids_padded.append(output_ids)
-        masks.append(mask)
+        if 1 in mask:  # Skip samples where mask doesn't have any 1s
+            input_ids_padded.append(input_ids)
+            output_ids_padded.append(output_ids)
+            masks.append(mask)
 
     input_ids_padded = torch.tensor(input_ids_padded, dtype=torch.long)
     output_ids_padded = torch.tensor(output_ids_padded, dtype=torch.long)

@@ -155,7 +155,7 @@ if config.compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
 
 # logging
 if config.wandb_log and master_process:
@@ -192,8 +192,8 @@ elif config.train_mode == 'sft':
     train_dataset = CustomDataset(dataset['train'], tokenizer)
     val_dataset = CustomDataset(dataset['val'], tokenizer)
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer))
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer))
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
 
     train_iter = iter(train_loader)
     val_iter = iter(val_loader)
@@ -271,7 +271,7 @@ while True:
         with ctx:
             # mask = torch.zeros((config.batch_size, config.train_size), dtype=torch.bool, device=device)
             # mask[:, -config.memory_block_size:] = 1
-            _, loss = model(X, Y, masks=masks)
+            _, loss, _ = model(X, Y, attention_mask=masks)
             loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
 
         # immediately async prefetch next batch while model is doing the forward pass on the GPU

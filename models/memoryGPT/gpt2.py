@@ -13,6 +13,7 @@ import inspect
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from transformers import AutoTokenizer
 from transformers.activations import ACT2FN
 
 from . import GPTConfig
@@ -62,8 +63,8 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
         self.mlp = MLP(config)
 
-    def forward(self, x, memory_update_flag):
-        x = x + self.self_attn(self.input_layernorm(x), memory_update_flag)
+    def forward(self, x, short_term_memory_init=False, memory_update_flag=False):
+        x = x + self.self_attn(self.input_layernorm(x), short_term_memory_init, memory_update_flag)
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
@@ -119,11 +120,35 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, masks=None, cal_segment_loss=False):
+    def forward(self, idx, targets=None, attention_mask=None, cal_segment_loss=False):
+        # torch.autograd.set_detect_anomaly(True)
 
         batch_size, input_len = idx.size()
         # print("batch_size: ", batch_size)
         # print("input_len: ", input_len)
+
+        # # 训练时如果输入序列长度大于1024 * 32，只取前1024 * 32个token
+        # if input_len > 1024 * 32:
+        #     idx = idx[:, :1024 * 32]
+        #     input_len = 1024 * 32
+
+        # 初始化短期记忆
+        if self.model.layers[0].self_attn.memory.short_term_memory.pool is None:
+
+            # print("Initializing short-term memory...")
+            tokenizer = AutoTokenizer.from_pretrained(self.config.init_from)
+
+            # 创建一个初始化输入idx，值都是<|im_start|>，也就是151644
+            short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size), tokenizer.eos_token_id, dtype=torch.long, device=idx.device)
+
+            # 将初始化输入idx传入模型
+            output = self.model.embed_tokens(short_term_memory_init_idx)
+
+            # 初始化短期记忆
+            for block in self.model.layers:
+                output = block(output, short_term_memory_init=True)
+
+            print("Short-term memory initialized.")
 
         # 定义 input_block_size 和 memory_block_size
         input_block_size = self.config.input_block_size  # 例如 1024
@@ -141,6 +166,8 @@ class GPT(nn.Module):
         # print("past_input_len: ", past_input_len)
         # print("end_pos: ", end_pos)
 
+        print("input idx: ", idx)
+
         # 嵌入所有的 tokens
         tok_emb = self.model.embed_tokens(idx)
 
@@ -155,6 +182,8 @@ class GPT(nn.Module):
 
         output_start_pos = 0
         while end_pos < seq_len:
+
+            print("forwarding...")
 
             if self.tokens_left_to_update_memory - (seq_len - end_pos) > 0:
                 # 如果输入序列的长度小于更新记忆需要的 token 数
@@ -182,7 +211,7 @@ class GPT(nn.Module):
 
             # 通过模型层
             for block in self.model.layers:
-                output = block(output, memory_update_flag)
+                output = block(output, memory_update_flag=memory_update_flag)
 
             # 获取当前块的 logits
             # if end_pos == seq_len:
@@ -193,10 +222,30 @@ class GPT(nn.Module):
                 logits = self.lm_head(self.model.norm(output))[:, [-1], :]
 
         if targets is not None:
-            if masks is not None:
-                targets[masks == 0] = -1  # 将被 mask 的位置设置为 -1
+            # 清除模型层的记忆
+            for block in self.model.layers:
+                block.self_attn.memory.clear_all()
+
+            if attention_mask is not None:
+                targets[attention_mask == 0] = -1  # 将被 mask 的位置设置为 -1
             logits = logits.reshape(-1, logits.size(-1))
             targets = targets.reshape(-1)
+
+            # 求logits中的最大值
+            # print("logits max: ", logits.max())
+
+            # 输出logits的shape
+            # print("logits shape: ", logits.shape)
+
+            # # 取最后一个时间步的预测结果
+            # logits = logits[:, output_start_pos:output_start_pos+predict_len, :]
+            # targets = targets[output_start_pos:output_start_pos+predict_len]
+
+            # # 如果序列长度大于1024，只取最后1024个token的loss
+            # if input_len > 1024:
+            #     logits = logits[-1024:, :]
+            #     targets = targets[-1024:]
+
             loss = F.cross_entropy(logits, targets, ignore_index=-1)
 
             # print("logits shape: ", logits.shape)
@@ -205,18 +254,23 @@ class GPT(nn.Module):
             # 计算 segment_loss
             if cal_segment_loss:
                 segment_loss = []
-                for i in range(input_len//memory_block_size):
-                    segment_loss.append(F.cross_entropy(logits[i*memory_block_size:(i+1)*memory_block_size, :], targets[i*memory_block_size:(i+1)*memory_block_size], ignore_index=-1))
+                # 确定长度的情况
+                # for i in range(input_len//memory_block_size):
+                #     segment_loss.append(F.cross_entropy(logits[i*memory_block_size:(i+1)*memory_block_size, :], targets[i*memory_block_size:(i+1)*memory_block_size], ignore_index=-1))
+                # # concert segment_losses to tensor
+                # segment_loss = torch.stack(segment_loss)
+
+                # 不确定什么长度，每个 memory_block_size 长度计算一次 loss
+                for i in range(0, input_len, memory_block_size):
+                    segment_loss.append(F.cross_entropy(logits[i:i+memory_block_size, :], targets[i:i+memory_block_size], ignore_index=-1))
+
                 # concert segment_losses to tensor
                 segment_loss = torch.stack(segment_loss)
+
             else:
                 segment_loss = None
 
-            # 清除模型层的记忆
-            for block in self.model.layers:
-                block.self_attn.memory.clear_all()
-
-            return None, loss, segment_loss if cal_segment_loss else None
+            return logits, loss, segment_loss if cal_segment_loss else None,
         else:
             # save the past input for next iteration
             pos = max(seq_len - self.config.memory_block_size - self.config.input_block_size + 1, 0)
@@ -335,7 +389,7 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens=100, eos_token_id=None, temperature=1.0, top_k=None, output_type="str"):
+    def generate(self, idx, max_new_tokens=400, eos_token_id=None, temperature=0.3, top_k=None, output_type="str"):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
@@ -388,5 +442,7 @@ class GPT(nn.Module):
                 self.config.init_from,
             )
             return enc.decode(idx[0])
-
-        return idx
+        elif output_type == "idx":
+            return idx
+        else:
+            raise ValueError("output_type must be 'str' or 'idx'")

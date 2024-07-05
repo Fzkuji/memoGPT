@@ -19,3 +19,4 @@ nvitop
 wandb
 datatrove
 pandas
+jsonlines

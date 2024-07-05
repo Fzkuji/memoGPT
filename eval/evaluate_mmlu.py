@@ -9,35 +9,60 @@ from transformers.trainer_utils import set_seed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation import GenerationConfig
 
+from models.memoryGPT import GPTConfig
+from models.memoryGPT.gpt2 import GPT
+
 """
 wget https://people.eecs.berkeley.edu/~hendrycks/data.tar
 mkdir data/mmlu
 mv data.tar data/mmlu
 cd data/mmlu; tar xf data.tar
 cd ../../
-python eval/evaluate_mmlu.py -d data/mmlu/data/
+# python eval/evaluate_mmlu.py -d data/mmlu/data/
+# 这里因为要跨文件夹运行，所以需要在项目根目录运行，因此需要加上 -m 参数，不用原来的了
+python -m eval.evaluate_mmlu -d data/mmlu/data/
 """
 
 
 def load_models_tokenizer(args):
     tokenizer = AutoTokenizer.from_pretrained(
-        args.checkpoint_path,
+        args.base_model,
         pad_token='<|extra_0|>',
         eos_token='<|endoftext|>',
         padding_side='left',
         trust_remote_code=True
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        args.checkpoint_path,
-        pad_token_id=tokenizer.pad_token_id,
-        device_map="auto",
-        trust_remote_code=True
-    ).eval()
-    model.generation_config = GenerationConfig.from_pretrained(
-        args.checkpoint_path,
-        pad_token_id=tokenizer.pad_token_id,
-        trust_remote_code=True
-    )
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     args.checkpoint_path,
+    #     pad_token_id=tokenizer.pad_token_id,
+    #     device_map="auto",
+    #     trust_remote_code=True
+    # ).eval()
+
+    # resume training from a checkpoint.
+    ckpt_path = os.path.join(args.checkpoint_path, 'ckpt.pt')
+    checkpoint = torch.load(ckpt_path, map_location='cuda')
+    checkpoint_model_args = checkpoint['model_args']
+
+    # create the model
+    gptconf = GPTConfig(**checkpoint_model_args)
+    model = GPT(gptconf)
+    state_dict = checkpoint['model']
+    # fix the keys of the state dictionary :(
+    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+    model.load_state_dict(state_dict)
+    model = model.to('cuda')
+    model.eval()
+
+    # model.generation_config = GenerationConfig.from_pretrained(
+    #     args.checkpoint_path,
+    #     pad_token_id=tokenizer.pad_token_id,
+    #     trust_remote_code=True
+    # )
     return model, tokenizer
 
 
@@ -77,16 +102,15 @@ def generate_few_shot_prompt(k, subject, dev_df):
 
 def get_logits(tokenizer, model, inputs: List[str]):
     input_ids = tokenizer(inputs, padding='longest')["input_ids"]
-    input_ids = torch.tensor(input_ids, device=model.device)
+    input_ids = torch.tensor(input_ids, device=model.config.device)
 
     if input_ids.shape[1] > args.max_seq_len:
         input_ids = input_ids[:, input_ids.shape[1] - args.max_seq_len + 1 :]
     tokens = {"input_ids": input_ids}
     attention_mask = input_ids.ne(tokenizer.pad_token_id)
 
-    outputs = model(input_ids, attention_mask=attention_mask)["logits"]
-    logits = outputs[:, -1, :]
-    log_probs = torch.nn.functional.softmax(logits, dim=-1)
+    logits, _ = model(input_ids, attention_mask=attention_mask)
+    log_probs = torch.nn.functional.softmax(logits, dim=-1)[:, 0, :]
     return log_probs, {"tokens": tokens}
 
 
@@ -116,7 +140,7 @@ def eval_subject(
     choices_ids = torch.tensor(
         tokenizer(" A")["input_ids"] + tokenizer(" B")["input_ids"] +
         tokenizer(" C")["input_ids"] + tokenizer(" D")["input_ids"]
-    ).unsqueeze(0).to(model.device)
+    ).unsqueeze(0).to(model.config.device)
 
     idx_list = list(range(0, len(test_df), batch_size))
     for i in tqdm(idx_list):
@@ -130,6 +154,7 @@ def eval_subject(
                 answer_list.append(row['answer'])
 
         logits, input_info = get_logits(tokenizer, model, full_prompt_list)
+
         softval = logits.gather(1, choices_ids.expand(logits.size(0), -1)).softmax(1)
         if softval.dtype in {torch.bfloat16, torch.float16}:
             softval = softval.to(dtype=torch.float32)
@@ -299,12 +324,20 @@ choices = ["A", "B", "C", "D"]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test HF checkpoint.")
     parser.add_argument(
+        "-b",
+        "--base-model",
+        type=str,
+        help="Base model",
+        default="Qwen/Qwen2-0.5B-Instruct",
+    )
+    parser.add_argument(
         "-c",
         "--checkpoint-path",
         type=str,
         help="Checkpoint path",
-        default="Qwen/Qwen-7B",
+        default="out-owt",
     )
+
     parser.add_argument("-s", "--seed", type=int, default=1234, help="Random seed")
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
 

@@ -2,9 +2,13 @@ import time
 
 import torch
 
+
+# seed
+seed = 1337
+
 # 输出和日志
 out_dir = 'out-owt'
-eval_interval = 500
+eval_interval = 200
 eval_iters = 100
 eval_only = False
 
@@ -16,16 +20,16 @@ wandb_run_name = 'ft-' + str(time.time())
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
 train_mode = 'pretrain'  # pretrain, sft
-init_from = 'resume'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
 
 # 训练参数
 batch_size = 1
-gradient_accumulation_steps = 16
-max_iters = 600000
-lr_decay_iters = 100000
+gradient_accumulation_steps = 32
+max_iters = 60000
+lr_decay_iters = 10000
 warmup_iters = 200  # how many steps to warm up for
 
 # 模型参数
@@ -36,15 +40,20 @@ n_embd = 896
 num_attention_heads = 14
 num_key_value_heads = 2
 
-short_term_memory_size = 16
+short_term_memory_size = 8
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-block_size = 1024
 input_block_size = 256
-train_size_ratio = 36  # 32
-val_size_ratio = 36  # Need 22GB per 1024 * 1024 tokens long context
-train_size = input_block_size * train_size_ratio
-val_size = input_block_size * val_size_ratio
+memory_block_size = 128
+train_size_ratio = 32  # 32
+val_size_ratio = 32  # Need 22GB per 1024 * 1024 tokens long context
+train_size = memory_block_size * train_size_ratio
+val_size = memory_block_size * val_size_ratio
+
+# calculate the number of tokens in one batch
+# batch_size * train_size * gradient_accumulation_steps
+
+rope_theta = 1000000.0
 
 # 优化器参数
 learning_rate = 8e-5
