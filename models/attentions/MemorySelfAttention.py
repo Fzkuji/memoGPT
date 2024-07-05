@@ -8,6 +8,43 @@ from models.attentions.Memory import Memory
 from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis, apply_separate_rotary_emb
 
 
+# Copied from transformers.models.llama.modeling_llama.rotate_half
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+# Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors.
+
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`):
+            The position indices of the tokens corresponding to the query and key tensors. For example, this can be
+            used to pass offsetted position ids when working with a KV-cache.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -72,13 +109,19 @@ class MemorySelfAttention(nn.Module):
 
             if self.memory.short_term_memory.pool is None:
 
-                q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim)
-                k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim)
-                v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim)
+                q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+                k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+                v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+                kv_seq_len = k.shape[-2]
+
+                cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
+                position_ids = torch.arange(kv_seq_len, device=x.device).expand(B, kv_seq_len)
+                query_states, key_states = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
                 q, k = apply_rotary_emb(q, k, self.freqs_cis_seq[:q.shape[1]])
 
-                q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
+
 
                 # repeat k/v heads if n_kv_heads < n_heads
                 k = repeat_kv(k, self.num_key_value_groups)
