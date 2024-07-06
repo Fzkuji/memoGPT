@@ -260,6 +260,8 @@ class MemorySelfAttention(nn.Module):
                     freqs_cis_memory,
                 )
                 self.long_term_memory_update = False
+
+            # 这部分是 llama 3 的代码, 很遗憾 qwen 2 用不了, 但是只有 qwen 2 有0.5B的模型
             # print("q.shape: ", q.shape)
             # print("freqs_cis_seq: ", self.freqs_cis_seq.shape)
 
@@ -273,12 +275,16 @@ class MemorySelfAttention(nn.Module):
             q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
 
             kv_seq_len = k.shape[-2]
-
             cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
+            # position_ids 为 short_term_memory 到 short_term_memory + T 的位置
+            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).unsqueeze(0)
+            k[:, :, -T:, :] = apply_rotary_pos_emb_separately(k[:, :, -T:, :], cos, sin, position_ids)
 
-            position_ids = torch.arange(self.config.short_term_memory_size, device=x.device).unsqueeze(0)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
-
+            q_seq_len = q.shape[-2]
+            cos, sin = self.rotary_emb(q, seq_len=q_seq_len)
+            # position_ids 为 short_term_memory 到 short_term_memory + T 的位置
+            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).unsqueeze(0)
+            q[:, :, -T:, :] = apply_rotary_pos_emb_separately(q[:, :, -T:, :], cos, sin, position_ids)
 
             # repeat k/v heads if n_kv_heads < n_heads
             k = repeat_kv(k, self.num_key_value_groups)
@@ -290,7 +296,7 @@ class MemorySelfAttention(nn.Module):
             start_pos_2 = end_pos - k.shape[2]
 
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:, :, start_pos:end_pos, start_pos_2:end_pos] == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:, :, mid_pos:mid_pos+q.shape[2], mid_pos:mid_pos+k.shape[2]] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
