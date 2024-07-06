@@ -272,6 +272,7 @@ class MemorySelfAttention(nn.Module):
             #     freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size],
             # )
 
+            # 这部分是 qwen2 的代码
             q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
 
             kv_seq_len = k.shape[-2]
