@@ -181,6 +181,8 @@ class MemorySelfAttention(nn.Module):
 
             if self.memory.short_term_memory.pool is None:
 
+                self.memory.init_short_term_memory(x)
+
                 q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
                 k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
                 v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -195,19 +197,12 @@ class MemorySelfAttention(nn.Module):
                 k = repeat_kv(k, self.num_key_value_groups)
                 v = repeat_kv(v, self.num_key_value_groups)
 
-                # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-                # manual implementation of attention
-                start_pos = end_pos - q.shape[2]
-                start_pos_2 = end_pos - k.shape[2]
-
                 att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
                 att = att.masked_fill(self.bias[:, :, mid_pos:mid_pos+self.config.short_term_memory_size, mid_pos:mid_pos+self.config.short_term_memory_size] == 0, float('-inf'))
                 att = F.softmax(att, dim=-1)
                 att = self.attn_dropout(att)
                 y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
                 y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
-
-                self.memory.init_short_term_memory(y)
 
                 # output projection
                 y = self.resid_dropout(self.o_proj(y))
@@ -293,9 +288,6 @@ class MemorySelfAttention(nn.Module):
 
             # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             # manual implementation of attention
-            start_pos = end_pos - q.shape[2]
-            start_pos_2 = end_pos - k.shape[2]
-
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:, :, mid_pos:mid_pos+q.shape[2], mid_pos:mid_pos+k.shape[2]] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
@@ -303,9 +295,7 @@ class MemorySelfAttention(nn.Module):
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-            if short_term_memory_update:
-                self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-                self.long_term_memory_update = True
+
 
             # output projection
             y = y[:, -T:, :]  # only take the last T tokens
