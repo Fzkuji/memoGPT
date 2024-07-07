@@ -213,59 +213,32 @@ class MemorySelfAttention(nn.Module):
                 raise ValueError("Short term memory already initialized")
 
         else:
-            short_term_memory = self.memory.short_term_memory.get_all(B)
+
+            short_term_memory = self.memory.get_short_term_memory(B)
+            long_term_memory = self.memory.get_long_term_memory(B)
+            memory_len = self.memory.get_len()
 
             # # concatenate the memory and the input
-            # x = torch.cat([short_term_memory, x], dim=1)
             q_list, k_list, v_list = [], [], []
-            for i in [short_term_memory, x]:
+            for i in [long_term_memory, short_term_memory, x]:
                 # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+                if i is not None:
+                    q_list.append(self.q_proj(i).view(B, -1, self.num_attention_heads, self.head_dim))  # (B, T, nh, hs)
+                    k_list.append(self.k_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
+                    v_list.append(self.v_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
 
-                # # 这里不能循环赋值q, k, v，因为这会导致q, k, v的梯度无法传播
-                # q = self.q_proj(i)
-                # k = self.k_proj(i)
-                # v = self.v_proj(i)
-
-                q_list.append(self.q_proj(i).view(B, -1, self.num_attention_heads, self.head_dim))  # (B, T, nh, hs)
-                k_list.append(self.k_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
-                v_list.append(self.v_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
-
-            long_k, long_v = self.memory.get_long_term_memory(B)
-            start_pos = self.memory.get_long_term_memory_len()
-            long_k.extend(k_list)
-            long_v.extend(v_list)
             q = torch.cat(q_list, dim=1)
-            k = torch.cat(long_k, dim=1)
-            v = torch.cat(long_v, dim=1)
+            k = torch.cat(k_list, dim=1)
+            v = torch.cat(v_list, dim=1)
 
             # print("q.shape: ", q.shape)
 
             if self.long_term_memory_update:
-                # 实例化RotaryEmbedding
-                freqs_cis_memory = precompute_freqs_cis(
-                    dim=self.config.n_embd // self.config.num_attention_heads,
-                    fix_t=-T,
-                    end=self.config.input_block_size * 2,
-                    theta=self.config.rope_theta,
-                ).to(self.config.device)
 
                 self.memory.update_long_term_memory(
-                    k[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # k
-                    v[:, start_pos:start_pos+self.config.short_term_memory_size, :, :],  # v
-                    freqs_cis_memory,
+                    short_term_memory,
                 )
                 self.long_term_memory_update = False
-
-            # 这部分是 llama 3 的代码, 很遗憾 qwen 2 用不了, 但是只有 qwen 2 有0.5B的模型
-            # print("q.shape: ", q.shape)
-            # print("freqs_cis_seq: ", self.freqs_cis_seq.shape)
-
-            # q = apply_separate_rotary_emb(q, freqs_cis=self.freqs_cis_seq[:q.shape[1]])
-            #
-            # k[:, -T - self.config.short_term_memory_size:, :, :] = apply_separate_rotary_emb(
-            #     k[:, -T - self.config.short_term_memory_size:, :, :],
-            #     freqs_cis=self.freqs_cis_seq[0: T + self.config.short_term_memory_size],
-            # )
 
             # 这部分是 qwen2 的代码
             q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
@@ -286,16 +259,24 @@ class MemorySelfAttention(nn.Module):
             k = repeat_kv(k, self.num_key_value_groups)
             v = repeat_kv(v, self.num_key_value_groups)
 
+            # assert that q, k, v have the same shape else print the shape
+            assert q.shape == k.shape == v.shape, f"q, k, v shapes are {q.shape}, {k.shape}, {v.shape}"
+
+
             # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             # manual implementation of attention
+            print("memory_len: ", memory_len)
+
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:, :, mid_pos:mid_pos+q.shape[2], mid_pos:mid_pos+k.shape[2]] == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:, :, mid_pos-memory_len:mid_pos+T, mid_pos-memory_len:mid_pos+T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-
+            if short_term_memory_update:
+                self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
+                self.long_term_memory_update = True
 
             # output projection
             y = y[:, -T:, :]  # only take the last T tokens
