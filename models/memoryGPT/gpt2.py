@@ -100,7 +100,7 @@ class GPT(nn.Module):
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
         self.past_input = None
-        self.tokens_left_to_update_memory = self.config.memory_block_size
+        self.tokens_left_to_update_memory = self.config.input_block_size
 
     def get_num_params(self, non_embedding=True):
         """
@@ -148,7 +148,7 @@ class GPT(nn.Module):
             for block in self.model.layers:
                 output = block(output, short_term_memory_init=True)
 
-            print("Short-term memory initialized.")
+            # print("Short-term memory initialized.")
 
         # 定义 input_block_size 和 memory_block_size
         input_block_size = self.config.input_block_size  # 例如 1024
@@ -157,7 +157,10 @@ class GPT(nn.Module):
         # print("memory_block_size: ", memory_block_size)
 
         if self.past_input is not None:
+
             end_pos = self.past_input.size(1)
+            print("past_input is not None", end_pos)
+            print("self.tokens_left_to_update_memory :", self.tokens_left_to_update_memory)
             idx = torch.cat((self.past_input, idx), dim=1)
             self.past_input = None
         else:
@@ -166,7 +169,7 @@ class GPT(nn.Module):
         # print("past_input_len: ", past_input_len)
         # print("end_pos: ", end_pos)
 
-        print("input idx: ", idx)
+        # print("input idx: ", idx)
 
         # 嵌入所有的 tokens
         tok_emb = self.model.embed_tokens(idx)
@@ -183,32 +186,36 @@ class GPT(nn.Module):
         output_start_pos = 0
         while end_pos < seq_len:
 
-            print("forwarding...")
+            # print("forwarding...")
 
             if self.tokens_left_to_update_memory - (seq_len - end_pos) > 0:
                 # 如果输入序列的长度小于更新记忆需要的 token 数
+                self.tokens_left_to_update_memory -= (seq_len - end_pos)
                 predict_len = seq_len - end_pos
                 end_pos = seq_len
-                start_pos = max(end_pos - memory_block_size - input_block_size, 0)
-                self.tokens_left_to_update_memory -= (seq_len - end_pos)
+                start_pos = max(end_pos - input_block_size - memory_block_size, 0)
+                print("tokens_left_to_update_memory_updated: ", self.tokens_left_to_update_memory)
                 memory_update_flag = False
             else:
                 # 如果输入序列的长度大于更新记忆需要的 token 数
                 predict_len = memory_block_size
                 end_pos = end_pos + self.tokens_left_to_update_memory
                 # print("end_pos: ", end_pos)
-                start_pos = max(end_pos - memory_block_size - input_block_size, 0)
+                start_pos = max(end_pos - input_block_size - memory_block_size, 0)
                 # print("start_pos: ", start_pos)
                 self.tokens_left_to_update_memory = memory_block_size
                 # print("tokens_left_to_update_memory: ", self.tokens_left_to_update_memory)
                 memory_update_flag = True
 
             # print("predict_len: ", predict_len)
+            # print("start_pos: ", start_pos)
+            # print("end_pos: ", end_pos)
 
             # 获取当前块的 tok_emb
             output = tok_emb[:, start_pos:end_pos, :]
             # print("output shape: ", output.shape)
 
+            print("memory_update_flag: ", memory_update_flag)
             # 通过模型层
             for block in self.model.layers:
                 output = block(output, memory_update_flag=memory_update_flag)

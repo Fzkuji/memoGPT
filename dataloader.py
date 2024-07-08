@@ -20,11 +20,22 @@ class CustomDataset(Dataset):
         question = row['question']
         response = row['response']
 
-        input_text = question + response
-        output_text = question + response + ' ' + self.tokenizer.pad_token
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": response},
+        ]
 
-        input_ids = self.tokenizer.encode(input_text)
-        output_ids = self.tokenizer.encode(output_text)[1:]  # 去掉第一个token
+        text = self.tokenizer.apply_chat_template(messages, tokenize=False)
+
+        # 将文本用 "assistant\n" 分为问题和回答两部分 同时 "assistant\n" 本身放在 question 的最后
+        question, response = text.split("assistant\n")
+        question += "assistant\n"
+
+        # 输入去掉第最后一个token
+        input_ids = self.tokenizer.encode(text)[:-1]
+        # 输出去掉第一个token
+        output_ids = self.tokenizer.encode(text)[1:]
 
         return {
             'input_ids': input_ids,

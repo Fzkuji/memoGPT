@@ -20,14 +20,14 @@ wandb_run_name = 'ft-' + str(time.time())
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
 train_mode = 'sft'  # pretrain, sft
-init_from = 'resume'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
 
 # 训练参数
 batch_size = 1
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 16
 max_iters = 60000
 lr_decay_iters = 10000
 warmup_iters = 200  # how many steps to warm up for
@@ -56,9 +56,9 @@ val_size = memory_block_size * val_size_ratio
 rope_theta = 1000000.0
 
 # 优化器参数
-learning_rate = 8e-5
+learning_rate = 3e-5
 decay_lr = True
-min_lr = 1e-6
+min_lr = 3e-5
 
 # 额外的模型配置
 use_moe = False

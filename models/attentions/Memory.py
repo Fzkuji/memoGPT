@@ -2,48 +2,6 @@ import torch
 import torch.nn as nn
 
 from models.memoryGPT.config import GPTConfig
-from models.utils import apply_rotary_emb
-
-
-# class MemoryPool(nn.Module):
-#     """ A simple pool for storing tensors with a fixed capacity """
-#
-#     def __init__(self, config, capacity, attention_head_dims, key_value_head_dims, max_batch_size=64):
-#         super(MemoryPool, self).__init__()
-#         self.batch_size = max_batch_size
-#         self.capacity = capacity
-#
-#         # initialize the pool with zeros
-#         self.pool_q = torch.zeros(max_batch_size, capacity, attention_head_dims)
-#         self.pool_k = torch.zeros(max_batch_size, capacity, key_value_head_dims)
-#         self.pool_v = torch.zeros(max_batch_size, capacity, key_value_head_dims)
-#
-#     def get_all(self, batch_size):
-#         """ Return a tensor containing all elements in the pool """
-#         assert batch_size <= self.batch_size, f"Batch size {batch_size} is greater than the maximum batch size {self.batch_size}"
-#         # return self.pool[:batch_size]
-#         return self.pool_q[:batch_size], self.pool_k[:batch_size], self.pool_v[:batch_size]
-#
-#     def get_len(self):
-#         return self.capacity
-#
-#     def update(self, tensor_q, tensor_k, tensor_v):
-#         """ Update the pool with a new tensor """
-#         # assert tensor_q.shape == tensor_k.shape == tensor_v.shape, "All tensors should have the same shape"
-#
-#         bsz, seqlen, *dim = tensor_q.shape
-#         assert bsz <= self.batch_size, f"Batch size {bsz} is greater than the maximum batch size {self.batch_size}"
-#         assert seqlen == self.capacity, f"Sequence length {seqlen} is not equal to the capacity {self.capacity}"
-#
-#         self.pool_q[:bsz, :, :] = tensor_q.detach()
-#         self.pool_k[:bsz, :, :] = tensor_k.detach()
-#         self.pool_v[:bsz, :, :] = tensor_v.detach()
-#
-#     def clear(self):
-#         """ Clear the pool """
-#         self.pool_q.fill_(0)  # Efficient way to reset all elements to zero
-#         self.pool_k.fill_(0)
-#         self.pool_v.fill_(0)
 
 
 class MemoryPool(nn.Module):
@@ -56,15 +14,6 @@ class MemoryPool(nn.Module):
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims
-        # initialize the pool with zeros
-        # self.pool = torch.zeros(max_batch_size, capacity, *tensor_dims)
-
-        # initialize the pool with normal distribution
-        # self.pool = torch.randn(max_batch_size, capacity, *tensor_dims)
-        #
-        # self.pool = self.pool.to(config.device)
-        # self.pool_k = torch.zeros(max_batch_size, capacity, *tensor_dims)
-        # self.pool_v = torch.zeros(max_batch_size, capacity, *tensor_dims)
 
     def get_all(self, batch_size):
         """ Return a tensor containing all elements in the pool """
@@ -93,9 +42,6 @@ class MemoryPool(nn.Module):
     def clear(self):
         """ Clear the pool """
         self.pool = None
-        # self.pool.fill_(0)  # Efficient way to reset all elements to zero
-        # self.pool_k.fill_(0)
-        # self.pool_v.fill_(0)
 
 
 class MemoryQueue(nn.Module):
@@ -126,10 +72,14 @@ class MemoryQueue(nn.Module):
         self.index = 0
 
     def push(self, tensor):
+        if len(self.queue) == 0:
+            self.batch_size = tensor.shape[0]
+
         """ Add a tensor to the queue """
         bsz, seqlen, *dim = tensor.shape  # bsz: batch size, seqlen: sequence length
         if bsz != self.batch_size:
             self.clear()
+            print(f"Long-term memory cleared. Batch size changed from {self.batch_size} to {bsz}.")
 
         self.queue.append(tensor.detach())
         # self.queue_v.append(tensor_v.detach())
@@ -144,13 +94,6 @@ class MemoryQueue(nn.Module):
             return True  # Carry over
         else:
             return False
-
-    # def update_rotary_emb(self, freqs_cis):
-    #     if self.queue_k is None:
-    #         return
-    #     for i in range(len(self.queue_k)):
-    #         k, v = apply_rotary_emb(self.queue_k[i], self.queue_v[i], freqs_cis[0:self.queue_k[i].shape[1]])
-    #         self.queue_k[i], self.queue_v[i] = k, v
 
     def get_all(self, batch_size=0):
         """ Return a tensor containing all elements in the queue """
@@ -218,7 +161,8 @@ class Memory(nn.Module):
         if len(long_term_memories) == 0:
             return None
         else:
-            long_term_memories = torch.stack(long_term_memories, dim=1)
+            # 得用concatenate 否则维度会变化
+            long_term_memories = torch.cat(long_term_memories, dim=1)
             return long_term_memories
 
     def get_short_term_memory(self, batch_size):

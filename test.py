@@ -20,9 +20,10 @@ def create_memory_mask(long_term_memory_size, short_term_memory_size, input_bloc
 
 # Example usage
 long_term_memory_size = 2
-short_term_memory_size = 2
+short_term_memory_size = 4
 input_block_size = 4
 memory_block_size = 4
 
 mask = create_memory_mask(long_term_memory_size, short_term_memory_size, input_block_size, memory_block_size)
 print(mask)
+

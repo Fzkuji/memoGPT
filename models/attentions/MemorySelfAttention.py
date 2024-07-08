@@ -125,7 +125,7 @@ class MemorySelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.long_term_memory_update = False
+        # self.long_term_memory_update = False
         self.config = config
         # key, query, value projections for all heads, but in a batch
         self.num_attention_heads = config.num_attention_heads
@@ -156,13 +156,6 @@ class MemorySelfAttention(nn.Module):
             )
         )
 
-        # 实例化RotaryEmbedding
-        self.freqs_cis_seq = precompute_freqs_cis(
-            dim=config.n_embd // config.num_attention_heads,
-            end=config.input_block_size + config.memory_block_size + config.short_term_memory_size,
-            theta=config.rope_theta,
-        ).to(config.device)
-
         self.rotary_emb = Qwen2RotaryEmbedding(
             self.head_dim,
             # max_position_embeddings=self.max_position_embeddings,
@@ -173,6 +166,8 @@ class MemorySelfAttention(nn.Module):
     def forward(self, x, short_term_memory_init=False, short_term_memory_update=False):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+
+        print("T: ", T)
 
         mid_pos = self.memory.max_len
         end_pos = self.memory.max_len + T
@@ -218,30 +213,28 @@ class MemorySelfAttention(nn.Module):
             long_term_memory = self.memory.get_long_term_memory(B)
             memory_len = self.memory.get_len()
 
-            # # concatenate the memory and the input
-            q_list, k_list, v_list = [], [], []
-            for i in [long_term_memory, short_term_memory, x]:
-                # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-                if i is not None:
-                    q_list.append(self.q_proj(i).view(B, -1, self.num_attention_heads, self.head_dim))  # (B, T, nh, hs)
-                    k_list.append(self.k_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
-                    v_list.append(self.v_proj(i).view(B, -1, self.num_key_value_heads, self.head_dim))  # (B, T, nh, hs)
+            print("memory_len: ", memory_len)
+            print("short_term_memory: ", short_term_memory.shape if short_term_memory is not None else None)
+            print("long_term_memory: ", long_term_memory.shape if long_term_memory is not None else None)
 
-            q = torch.cat(q_list, dim=1)
-            k = torch.cat(k_list, dim=1)
-            v = torch.cat(v_list, dim=1)
 
-            # print("q.shape: ", q.shape)
+            # if self.long_term_memory_update:
+            #     print("self.long_term_memory_update: ", self.long_term_memory_update)
+            #     print("long_term_memory_before: ", self.memory.get_long_term_memory(B).shape if long_term_memory is not None else None)
+            #     # 断定短期记忆和长期记忆不同
+            #
+            #     print("long_term_memory_updated: ", self.memory.get_long_term_memory(B).shape)
+            #     self.long_term_memory_update = False
 
-            if self.long_term_memory_update:
+            # concatenate long_term_memory, short_term_memory and x
+            if long_term_memory is not None:
+                seq = torch.cat([long_term_memory, short_term_memory, x], dim=1)
+            else:
+                seq = torch.cat([short_term_memory, x], dim=1)
 
-                self.memory.update_long_term_memory(
-                    short_term_memory,
-                )
-                self.long_term_memory_update = False
-
-            # 这部分是 qwen2 的代码
-            q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, nh, T, hs)
+            q = self.q_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+            k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
             kv_seq_len = k.shape[-2]
             cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
@@ -262,10 +255,9 @@ class MemorySelfAttention(nn.Module):
             # assert that q, k, v have the same shape else print the shape
             assert q.shape == k.shape == v.shape, f"q, k, v shapes are {q.shape}, {k.shape}, {v.shape}"
 
-
             # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             # manual implementation of attention
-            print("memory_len: ", memory_len)
+            # print("memory_len: ", memory_len)
 
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:, :, mid_pos-memory_len:mid_pos+T, mid_pos-memory_len:mid_pos+T] == 0, float('-inf'))
@@ -275,8 +267,14 @@ class MemorySelfAttention(nn.Module):
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
             if short_term_memory_update:
+                # 断定短期记忆更新后和更新前不一样
+                assert not torch.equal(short_term_memory, y[:, mid_pos - self.config.short_term_memory_size:mid_pos, :]), "Error: Short term memory is the same after update"
+
                 self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-                self.long_term_memory_update = True
+
+                if long_term_memory is not None:
+                    assert not torch.equal(short_term_memory, long_term_memory), "Error: Short term memory and long term memory are the same"
+                self.memory.update_long_term_memory(short_term_memory)
 
             # output projection
             y = y[:, -T:, :]  # only take the last T tokens
