@@ -112,6 +112,7 @@ elif config.init_from == 'resume':
     # create the model
     gptconf = GPTConfig(**checkpoint_model_args)
     model = GPT(gptconf)
+    # model = model.to(ptdtype)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
     # honestly no idea how checkpoints sometimes get this prefix, have to debug more
@@ -155,15 +156,15 @@ if config.compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=False)
 
 # logging
 if config.wandb_log and master_process:
     import wandb
-
     wandb.init(project=config.wandb_project, name=config.wandb_run_name, config=config_dict)
 
 # Data loading
+tokenizer = model.module.tokenizer if ddp else model.tokenizer
 
 if config.train_mode == 'pretrain':
     train_iter = None
@@ -183,20 +184,24 @@ elif config.train_mode == 'sft':
         'val': val_test['train'],
         'test': val_test['test'],
     })
-    # 初始化Llama的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        "Qwen/Qwen2-0.5B-Instruct"
-    )
 
     # 创建数据集和DataLoader
     train_dataset = CustomDataset(dataset['train'], tokenizer)
     val_dataset = CustomDataset(dataset['val'], tokenizer)
+
+    # train_dataset 按照文本 answer 的长度进行排序
+    # train_dataset.sort(key='response')
+    train_dataset.filter_by_length(max_length=2048, keys=['response'])
 
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
 
     train_iter = iter(train_loader)
     val_iter = iter(val_loader)
+
+    if iter_num > 0:
+        for _ in range(iter_num):
+            _, _, _ = get_batch(config, device, device_type, data_iter=train_iter)
 
 else:
     raise ValueError(f"Invalid train_mode: {config.train_mode}")
@@ -205,6 +210,7 @@ X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
 
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
+
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
@@ -215,49 +221,49 @@ while True:
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # # evaluate the loss on train/val sets and write checkpoints
-        # if iter_num % config.eval_interval == 0 and master_process:
-        #     losses = estimate_loss(
-        #         config,
-        #         model,
-        #         ctx,
-        #         device,
-        #         device_type,
-        #         iter_num,
-        #         dataiter=val_iter if config.train_mode == 'sft' else None
-        #     )
-        #     print(
-        #         f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
-        #     print(f"train segment loss: {losses['train_segment_loss']}, val segment loss: {losses['val_segment_loss']}")
-        #     if config.wandb_log:
-        #         wandb.log({
-        #             "iter": iter_num,
-        #             "train/loss": losses['train'],
-        #             "val/loss": losses['val'],
-        #             "train/perplexity": losses['train_perplexity'],
-        #             "val/perplexity": losses['val_perplexity'],
-        #             "lr": lr,
-        #             "mfu": running_mfu * 100,  # convert to percentage
-        #         })
-        #     if losses['val'] < best_val_loss or config.always_save_checkpoint:
-        #         if iter_num > 0:
-        #             checkpoint = {
-        #                 'model': raw_model.state_dict(),
-        #                 'optimizer': optimizer.state_dict(),
-        #                 'model_args': model_args,
-        #                 'iter_num': iter_num,
-        #                 'best_val_loss': best_val_loss,
-        #                 'configs': config_dict,
-        #             }
-        #             if losses['val'] < best_val_loss:
-        #                 print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
-        #                 torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
-        #                 best_val_loss = losses['val']
-        #             if config.always_save_checkpoint:
-        #                 print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
-        #                 torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
-        # if iter_num == 0 and config.eval_only:
-        #     break
+        # evaluate the loss on train/val sets and write checkpoints
+        if iter_num % config.eval_interval == 0 and master_process:
+            losses = estimate_loss(
+                config,
+                model,
+                ctx,
+                device,
+                device_type,
+                iter_num,
+                dataiter=val_iter if config.train_mode == 'sft' else None
+            )
+            print(
+                f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
+            print(f"train segment loss: {losses['train_segment_loss']}, val segment loss: {losses['val_segment_loss']}")
+            if config.wandb_log:
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "train/perplexity": losses['train_perplexity'],
+                    "val/perplexity": losses['val_perplexity'],
+                    "lr": lr,
+                    "mfu": running_mfu * 100,  # convert to percentage
+                })
+            if losses['val'] < best_val_loss or config.always_save_checkpoint:
+                if iter_num > 0:
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'model_args': model_args,
+                        'iter_num': iter_num,
+                        'best_val_loss': best_val_loss,
+                        'configs': config_dict,
+                    }
+                    if losses['val'] < best_val_loss:
+                        print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
+                        torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
+                        best_val_loss = losses['val']
+                    if config.always_save_checkpoint:
+                        print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
+                        torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+        if iter_num == 0 and config.eval_only:
+            break
 
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         # and using the GradScaler if data type is float16
@@ -271,7 +277,7 @@ while True:
             with ctx:
                 # mask = torch.zeros((config.batch_size, config.train_size), dtype=torch.bool, device=device)
                 # mask[:, -config.memory_block_size:] = 1
-                _, loss, _ = model(X, Y, attention_mask=masks)
+                _, loss, _ = model(idx=X, targets=Y, attention_mask=masks)
                 loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
 
             # immediately async prefetch next batch while model is doing the forward pass on the GPU

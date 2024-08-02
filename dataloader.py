@@ -9,39 +9,73 @@ from datasets import load_dataset
 
 class CustomDataset(Dataset):
     def __init__(self, dataset, tokenizer):
+        """
+
+        Args:
+            dataset: DatasetDict({
+                'train': train_valtest['train'],
+                'val': val_test['train'],
+                'test': val_test['test'],
+            })
+            tokenizer:
+        """
+
         self.dataset = dataset
         self.tokenizer = tokenizer
+
+        # 删除response为空的样本
+        self.dataset = dataset.filter(lambda x: x['response'] != '')
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         row = self.dataset[idx]
+        system = row['system_prompt']
         question = row['question']
         response = row['response']
 
         messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": system},
             {"role": "user", "content": question},
             {"role": "assistant", "content": response},
         ]
 
-        text = self.tokenizer.apply_chat_template(messages, tokenize=False)
+        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_special_tokens=False)
 
-        # 将文本用 "assistant\n" 分为问题和回答两部分 同时 "assistant\n" 本身放在 question 的最后
-        question, response = text.split("assistant\n")
-        question += "assistant\n"
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": question},
+        ]
+
+        question = self.tokenizer.apply_chat_template(messages, tokenize=False, add_special_tokens=False)
+
+        # # 将文本用 "assistant\n" 分为问题和回答两部分 同时 "assistant\n" 本身放在 question 的最后
+        # question, response = text.split("assistant\n")
+        # question += "assistant\n"
 
         # 输入去掉第最后一个token
-        input_ids = self.tokenizer.encode(text)[:-1]
+        input_ids = self.tokenizer.encode(text, add_special_tokens=False)[:-1]
         # 输出去掉第一个token
-        output_ids = self.tokenizer.encode(text)[1:]
+        output_ids = self.tokenizer.encode(text, add_special_tokens=False)[1:]
+        # 计算问题的长度
+        question_len = len(self.tokenizer.encode(question, add_special_tokens=False))
 
         return {
             'input_ids': input_ids,
             'output_ids': output_ids,
-            'question_len': len(self.tokenizer.encode(question))
+            'question_len': question_len,
         }
+
+    def sort(self, keys):
+        for key in keys:
+            self.dataset = sorted(self.dataset, key=lambda x: len(x[key]), reverse=True)
+
+    def filter_by_length(self, max_length, keys):
+
+        # 过滤长度之和超过max_length的样本
+        self.dataset = self.dataset.filter(lambda x: sum(len(self.tokenizer.encode(x[key], add_special_tokens=False)) for key in keys) <= max_length)
+
 
 
 # 定义自定义collate_fn

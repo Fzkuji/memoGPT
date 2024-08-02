@@ -6,6 +6,8 @@ import torch
 
 @dataclass
 class GPTConfig:
+    model_type: str = 'Qwen/Qwen2-0.5B-Instruct'
+
     max_batch_size: int = 64
 
     short_term_memory_size: int = 16

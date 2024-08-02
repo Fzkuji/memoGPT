@@ -163,11 +163,11 @@ class MemorySelfAttention(nn.Module):
             base=config.rope_theta,
         )
 
-    def forward(self, x, short_term_memory_init=False, short_term_memory_update=False):
+    def forward(self, x, short_term_memory_init=False, update_memory=False):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
-        print("T: ", T)
+        # print("T: ", T)
 
         mid_pos = self.memory.max_len
         end_pos = self.memory.max_len + T
@@ -210,21 +210,9 @@ class MemorySelfAttention(nn.Module):
         else:
 
             short_term_memory = self.memory.get_short_term_memory(B)
+            # print(self.memory.get_len())
             long_term_memory = self.memory.get_long_term_memory(B)
             memory_len = self.memory.get_len()
-
-            print("memory_len: ", memory_len)
-            print("short_term_memory: ", short_term_memory.shape if short_term_memory is not None else None)
-            print("long_term_memory: ", long_term_memory.shape if long_term_memory is not None else None)
-
-
-            # if self.long_term_memory_update:
-            #     print("self.long_term_memory_update: ", self.long_term_memory_update)
-            #     print("long_term_memory_before: ", self.memory.get_long_term_memory(B).shape if long_term_memory is not None else None)
-            #     # 断定短期记忆和长期记忆不同
-            #
-            #     print("long_term_memory_updated: ", self.memory.get_long_term_memory(B).shape)
-            #     self.long_term_memory_update = False
 
             # concatenate long_term_memory, short_term_memory and x
             if long_term_memory is not None:
@@ -266,14 +254,11 @@ class MemorySelfAttention(nn.Module):
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
-            if short_term_memory_update:
+            if update_memory:
                 # 断定短期记忆更新后和更新前不一样
                 assert not torch.equal(short_term_memory, y[:, mid_pos - self.config.short_term_memory_size:mid_pos, :]), "Error: Short term memory is the same after update"
 
                 self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
-
-                if long_term_memory is not None:
-                    assert not torch.equal(short_term_memory, long_term_memory), "Error: Short term memory and long term memory are the same"
                 self.memory.update_long_term_memory(short_term_memory)
 
             # output projection

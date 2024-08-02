@@ -63,8 +63,8 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
         self.mlp = MLP(config)
 
-    def forward(self, x, short_term_memory_init=False, memory_update_flag=False):
-        x = x + self.self_attn(self.input_layernorm(x), short_term_memory_init, memory_update_flag)
+    def forward(self, x, short_term_memory_init=False, update_memory=False):
+        x = x + self.self_attn(self.input_layernorm(x), short_term_memory_init, update_memory)
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
@@ -101,6 +101,10 @@ class GPT(nn.Module):
 
         self.past_input = None
         self.tokens_left_to_update_memory = self.config.input_block_size
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.init_from,
+            cache_dir='.cache/huggingface/hub',
+        )
 
     def get_num_params(self, non_embedding=True):
         """
@@ -120,26 +124,19 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, attention_mask=None, cal_segment_loss=False):
+    def forward(self, input_ids, labels=None, attention_mask=None, cal_segment_loss=False, **kwargs):
         # torch.autograd.set_detect_anomaly(True)
+        # print("New forwarding...Input length: ", idx.size(1))
 
-        batch_size, input_len = idx.size()
-        # print("batch_size: ", batch_size)
-        # print("input_len: ", input_len)
-
-        # # 训练时如果输入序列长度大于1024 * 32，只取前1024 * 32个token
-        # if input_len > 1024 * 32:
-        #     idx = idx[:, :1024 * 32]
-        #     input_len = 1024 * 32
+        batch_size, input_len = input_ids.size()
 
         # 初始化短期记忆
         if self.model.layers[0].self_attn.memory.short_term_memory.pool is None:
 
             # print("Initializing short-term memory...")
-            tokenizer = AutoTokenizer.from_pretrained(self.config.init_from)
 
             # 创建一个初始化输入idx，值都是<|im_start|>，也就是151644
-            short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size), tokenizer.eos_token_id, dtype=torch.long, device=idx.device)
+            short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size), self.tokenizer.eos_token_id, dtype=torch.long, device=input_ids.device)
 
             # 将初始化输入idx传入模型
             output = self.model.embed_tokens(short_term_memory_init_idx)
@@ -157,22 +154,14 @@ class GPT(nn.Module):
         # print("memory_block_size: ", memory_block_size)
 
         if self.past_input is not None:
-
             end_pos = self.past_input.size(1)
-            print("past_input is not None", end_pos)
-            print("self.tokens_left_to_update_memory :", self.tokens_left_to_update_memory)
-            idx = torch.cat((self.past_input, idx), dim=1)
+            input_ids = torch.cat((self.past_input, input_ids), dim=1)
             self.past_input = None
         else:
             end_pos = 0
 
-        # print("past_input_len: ", past_input_len)
-        # print("end_pos: ", end_pos)
-
-        # print("input idx: ", idx)
-
         # 嵌入所有的 tokens
-        tok_emb = self.model.embed_tokens(idx)
+        tok_emb = self.model.embed_tokens(input_ids)
 
         # 准备变量
         logits = None
@@ -180,8 +169,8 @@ class GPT(nn.Module):
         # print("seq_len (length of the whole seq): ", seq_len)
 
         # 如果是训练 targets不为空 则创建logits保存预测结果
-        if targets is not None:
-            logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device)
+        if labels is not None:
+            logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device, dtype=self.config.torch_dtype)
 
         output_start_pos = 0
         while end_pos < seq_len:
@@ -194,82 +183,54 @@ class GPT(nn.Module):
                 predict_len = seq_len - end_pos
                 end_pos = seq_len
                 start_pos = max(end_pos - input_block_size - memory_block_size, 0)
-                print("tokens_left_to_update_memory_updated: ", self.tokens_left_to_update_memory)
                 memory_update_flag = False
             else:
                 # 如果输入序列的长度大于更新记忆需要的 token 数
-                predict_len = memory_block_size
+                predict_len = self.tokens_left_to_update_memory
                 end_pos = end_pos + self.tokens_left_to_update_memory
-                # print("end_pos: ", end_pos)
                 start_pos = max(end_pos - input_block_size - memory_block_size, 0)
-                # print("start_pos: ", start_pos)
                 self.tokens_left_to_update_memory = memory_block_size
-                # print("tokens_left_to_update_memory: ", self.tokens_left_to_update_memory)
                 memory_update_flag = True
-
-            # print("predict_len: ", predict_len)
-            # print("start_pos: ", start_pos)
-            # print("end_pos: ", end_pos)
 
             # 获取当前块的 tok_emb
             output = tok_emb[:, start_pos:end_pos, :]
             # print("output shape: ", output.shape)
 
-            print("memory_update_flag: ", memory_update_flag)
+            # print("memory_update_flag: ", memory_update_flag)
             # 通过模型层
             for block in self.model.layers:
-                output = block(output, memory_update_flag=memory_update_flag)
+                output = block(output, update_memory=memory_update_flag)
 
             # 获取当前块的 logits
             # if end_pos == seq_len:
-            if targets is not None:
-                logits[:, output_start_pos:output_start_pos+predict_len, :] = self.lm_head(self.model.norm(output))[:, end_pos-start_pos-predict_len:, :]
-                output_start_pos += predict_len
+
+            # 当targets不为空且当前块的mask有1时，才保存logits
+            if labels is not None:
+                if attention_mask is None or attention_mask[:, output_start_pos:output_start_pos+predict_len].sum() > 0:
+                    output = self.lm_head(self.model.norm(output))
+                    logits[:, output_start_pos:output_start_pos+predict_len, :] = output[:, -predict_len:, :]
             else:
                 logits = self.lm_head(self.model.norm(output))[:, [-1], :]
+            output_start_pos += predict_len
 
-        if targets is not None:
+        if labels is not None:
             # 清除模型层的记忆
-            for block in self.model.layers:
-                block.self_attn.memory.clear_all()
+            self.clear_memory()
 
             if attention_mask is not None:
-                targets[attention_mask == 0] = -1  # 将被 mask 的位置设置为 -1
+                labels[attention_mask == 0] = -1  # 将被 mask 的位置设置为 -1
             logits = logits.reshape(-1, logits.size(-1))
-            targets = targets.reshape(-1)
+            labels = labels.reshape(-1)
 
-            # 求logits中的最大值
-            # print("logits max: ", logits.max())
-
-            # 输出logits的shape
-            # print("logits shape: ", logits.shape)
-
-            # # 取最后一个时间步的预测结果
-            # logits = logits[:, output_start_pos:output_start_pos+predict_len, :]
-            # targets = targets[output_start_pos:output_start_pos+predict_len]
-
-            # # 如果序列长度大于1024，只取最后1024个token的loss
-            # if input_len > 1024:
-            #     logits = logits[-1024:, :]
-            #     targets = targets[-1024:]
-
-            loss = F.cross_entropy(logits, targets, ignore_index=-1)
-
-            # print("logits shape: ", logits.shape)
-            # print("targets shape: ", targets.shape)
+            loss = F.cross_entropy(logits, labels, ignore_index=-1)
 
             # 计算 segment_loss
             if cal_segment_loss:
                 segment_loss = []
-                # 确定长度的情况
-                # for i in range(input_len//memory_block_size):
-                #     segment_loss.append(F.cross_entropy(logits[i*memory_block_size:(i+1)*memory_block_size, :], targets[i*memory_block_size:(i+1)*memory_block_size], ignore_index=-1))
-                # # concert segment_losses to tensor
-                # segment_loss = torch.stack(segment_loss)
 
                 # 不确定什么长度，每个 memory_block_size 长度计算一次 loss
                 for i in range(0, input_len, memory_block_size):
-                    segment_loss.append(F.cross_entropy(logits[i:i+memory_block_size, :], targets[i:i+memory_block_size], ignore_index=-1))
+                    segment_loss.append(F.cross_entropy(logits[i:i+memory_block_size, :], labels[i:i + memory_block_size], ignore_index=-1))
 
                 # concert segment_losses to tensor
                 segment_loss = torch.stack(segment_loss)
@@ -281,10 +242,16 @@ class GPT(nn.Module):
         else:
             # save the past input for next iteration
             pos = max(seq_len - self.config.memory_block_size - self.config.input_block_size + 1, 0)
-            self.past_input = idx[:, pos:]
+            self.past_input = input_ids[:, pos:]
 
             logits = logits[:, [-1], :]  # 只保留最后一个时间步的 logits
             return logits, None
+
+    def clear_memory(self):
+        for block in self.model.layers:
+            block.self_attn.memory.clear_all()
+        self.past_input = None
+        self.tokens_left_to_update_memory = self.config.input_block_size
 
     @classmethod
     def from_pretrained(cls, model_type, override_args):
@@ -315,11 +282,7 @@ class GPT(nn.Module):
             model = GPT(config)
 
             # change model dtype to torch_dtype
-            model = model.to(config.torch_dtype)
-
-            # # print all state_dict shape
-            # for key in model.state_dict().keys():
-            #     print(key, model.state_dict()[key].shape)
+            # model = model.to(dtype)
 
             sd = model.state_dict()
             sd_keys = sd.keys()
@@ -338,10 +301,6 @@ class GPT(nn.Module):
             sd_keys_hf = [k for k in sd_keys_hf if
                           not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
             sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.bias')]  # same, just the mask (buffer)
-
-            # # print mismatched keys
-            # print("mismatched keys: ", [k for k in sd_keys if k not in sd_keys_hf])
-            # print("mismatched keys: ", [k for k in sd_keys_hf if k not in sd_keys])
 
             assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
 
@@ -399,30 +358,28 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens=400, eos_token_id=None, temperature=0.3, top_k=None, output_type="str"):
+    def generate(self, input_ids, max_new_tokens=400, eos_token_id=None, temperature=0.3, top_k=None, output_type="str", **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
         The input sequence is divided into blocks of size input_block_size and memory is updated accordingly.
         Stop generating if the eos_token_id is generated.
         """
-        # 判断输入idx是否为字符串
-        if isinstance(idx, str):
-            from transformers import AutoTokenizer
-            enc = AutoTokenizer.from_pretrained(
-                self.config.init_from,
-            )
-            idx = enc.encode(idx, add_special_tokens=False)
-            idx = torch.tensor(idx).unsqueeze(0).to(self.config.device)
-
         from transformers import AutoTokenizer
+        enc = AutoTokenizer.from_pretrained(
+            self.config.init_from,
+            add_special_tokens=False,
+        )
+
+        # 判断输入idx是否为字符串
+        if isinstance(input_ids, str):
+            input_ids = enc.encode(input_ids, add_special_tokens=False)
+            input_ids = torch.tensor(input_ids).unsqueeze(0).to(self.config.device)
+
         if eos_token_id is None:
-            enc = AutoTokenizer.from_pretrained(
-                self.config.init_from,
-            )
             eos_token_id = enc.convert_tokens_to_ids(enc.pad_token)
 
-        idx_cond = idx
+        idx_cond = input_ids
 
         # print("idx shape: ", idx.shape)
 
@@ -440,19 +397,22 @@ class GPT(nn.Module):
             # sample from the distribution
             idx_cond = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_cond), dim=1)
+            input_ids = torch.cat((input_ids, idx_cond), dim=1)
 
             # If the generated token is the eos_token_id, stop generating
             if idx_cond.item() == eos_token_id:
                 break
 
         if output_type == "str":
-            from transformers import AutoTokenizer
-            enc = AutoTokenizer.from_pretrained(
-                self.config.init_from,
-            )
-            return enc.decode(idx[0])
+            return enc.decode(input_ids[0])
         elif output_type == "idx":
-            return idx
+            return input_ids
         else:
             raise ValueError("output_type must be 'str' or 'idx'")
+
+    def prepare_inputs_for_generation(self, input_ids, attention_mask=None, **kwargs):
+        print("prepare_inputs_for_generation")
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }

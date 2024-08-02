@@ -36,8 +36,6 @@ class MemoryPool(nn.Module):
         assert seqlen == self.capacity, f"Sequence length {seqlen} is not equal to the capacity {self.capacity}"
 
         self.pool[:bsz, :, :] = tensor.detach()
-        # self.pool_k[:bsz, :, :] = tensor_k
-        # self.pool_v[:bsz, :, :] = tensor_v
 
     def clear(self):
         """ Clear the pool """

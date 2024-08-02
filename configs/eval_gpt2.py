@@ -19,7 +19,7 @@ wandb_run_name = 'ft-' + str(time.time())
 
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
-train_mode = 'pretrain'  # pretrain, sft
+train_mode = 'sft'  # pretrain, sft
 init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
@@ -40,13 +40,15 @@ n_embd = 896
 num_attention_heads = 14
 num_key_value_heads = 2
 
-short_term_memory_size = 8
+short_term_memory_size = 1
+long_term_memory_layer = 1
+long_term_memory_chunk_size = 1024
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 256
-memory_block_size = 128
-train_size_ratio = 32  # 32
-val_size_ratio = 32  # Need 22GB per 1024 * 1024 tokens long context
+input_block_size = 2
+memory_block_size = 2
+train_size_ratio = 64  # 32
+val_size_ratio = 64  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 
