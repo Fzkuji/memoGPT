@@ -19,8 +19,8 @@ wandb_run_name = 'ft-' + str(time.time())
 
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
-train_mode = 'pretrain'  # pretrain, sft
-init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
+train_mode = 'sft'  # pretrain, sft
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2- 0.5B-Instruct', 'resume'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves

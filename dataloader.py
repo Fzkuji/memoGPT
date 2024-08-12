@@ -6,9 +6,11 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 from datasets import load_dataset
 
+import itertools
+
 
 class CustomDataset(Dataset):
-    def __init__(self, dataset, tokenizer):
+    def __init__(self, dataset, tokenizer, fields=None):
         """
 
         Args:
@@ -22,18 +24,20 @@ class CustomDataset(Dataset):
 
         self.dataset = dataset
         self.tokenizer = tokenizer
+        self.fields = fields
 
-        # 删除response为空的样本
-        self.dataset = dataset.filter(lambda x: x['response'] != '')
+        # 删除回答为空的样本
+        self.dataset = self.dataset.filter(lambda x: x[self.fields[2]] != "")
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         row = self.dataset[idx]
-        system = row['system_prompt']
-        question = row['question']
-        response = row['response']
+
+        system = row[self.fields[0]] if row[self.fields[0]] is not None else ""
+        question = row[self.fields[1]] if row[self.fields[1]] is not None else ""
+        response = row[self.fields[2]] if row[self.fields[2]] is not None else ""
 
         messages = [
             {"role": "system", "content": system},
@@ -73,8 +77,14 @@ class CustomDataset(Dataset):
 
     def filter_by_length(self, max_length, keys):
 
-        # 过滤长度之和超过max_length的样本
-        self.dataset = self.dataset.filter(lambda x: sum(len(self.tokenizer.encode(x[key], add_special_tokens=False)) for key in keys) <= max_length)
+        # 过滤 keys 字段长度之和超过max_length的样本 同时避免出现空样本
+        self.dataset = self.dataset.filter(
+            lambda x:
+            sum(
+                len(self.tokenizer.encode(x[key], add_special_tokens=False)) if x[key] is not None else 0
+                for key in keys
+            ) <= max_length
+        )
 
 
 
@@ -176,3 +186,9 @@ def get_batch(config, device, device_type, split='train', data_iter=None, valida
     else:
         raise ValueError(f"Invalid train_mode: {config.train_mode}")
     return X, Y, masks
+
+
+def infinite_iterator(loader):
+    while True:
+        for batch in loader:
+            yield batch

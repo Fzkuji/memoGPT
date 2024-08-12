@@ -20,7 +20,7 @@ wandb_run_name = 'ft-' + str(time.time())
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
 train_mode = 'sft'  # pretrain, sft
-init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
+init_from = 'resume'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
@@ -45,8 +45,8 @@ long_term_memory_layer = 1
 long_term_memory_chunk_size = 1024
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 2
-memory_block_size = 2
+input_block_size = 64
+memory_block_size = 8
 train_size_ratio = 64  # 32
 val_size_ratio = 64  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
