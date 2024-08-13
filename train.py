@@ -171,17 +171,25 @@ if config.train_mode == 'pretrain':
     val_iter = None
 
 elif config.train_mode == 'sft':
+
+    '''数据集: 格式, 是否进行了划分
+    Open-Orca/OpenOrca: ['system_prompt', 'question', 'response'], ['train']
+    neural-bridge/rag-dataset-12000: ['context', 'question', 'answer'], ['train', 'test']
+    '''
+
     # 加载数据集
     dataset = load_dataset(
-        "neural-bridge/rag-dataset-12000",  # Open-Orca/OpenOrca, neural-bridge/rag-dataset-12000
+        config.data_path,  # Open-Orca/OpenOrca, neural-bridge/rag-dataset-12000
         split="train",
         cache_dir='.cache/huggingface/datasets',
     )
-    '''数据集的格式
-    Open-Orca/OpenOrca: ['system_prompt', 'question', 'response']
-    neural-bridge/rag-dataset-12000: ['context', 'question', 'answer']
-    '''
 
+    if config.data_path == 'Open-Orca/OpenOrca':
+        fields = ['system_prompt', 'question', 'response']
+    elif config.data_path == 'neural-bridge/rag-dataset-12000':
+        fields = ['context', 'question', 'answer']
+
+    # 默认划分数据集 即使有的数据集已经划分了
     train_valtest = dataset.train_test_split(test_size=0.2, seed=config.seed)
     val_test = train_valtest['test'].train_test_split(test_size=0.5, seed=config.seed)
     dataset = DatasetDict({
@@ -191,25 +199,24 @@ elif config.train_mode == 'sft':
     })
 
     # 创建数据集和DataLoader
-    train_dataset = CustomDataset(dataset['train'], tokenizer, fields=['context', 'question', 'answer'])
-    val_dataset = CustomDataset(dataset['val'], tokenizer, fields=['context', 'question', 'answer'])
+    train_dataset = CustomDataset(dataset['train'], tokenizer, fields=fields)
+    val_dataset = CustomDataset(dataset['val'], tokenizer, fields=fields)
 
     # train_dataset 按照文本 answer 的长度进行排序
     # train_dataset.sort(key='response')
-    train_dataset.filter_by_length(max_length=1024, keys=['answer',])
-
-
-
+    train_dataset.filter_by_length(max_length=1024, keys=[fields[2],])
 
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
 
+    # 使用无限迭代器
     train_iter = infinite_iterator(train_loader)
     val_iter = infinite_iterator(val_loader)
 
     # train_iter = iter(train_loader)
     # val_iter = iter(val_loader)
 
+    # 如果是继续训练, 那么需要跳过已经训练过的batch
     if iter_num > 0:
         for _ in range(iter_num):
             _, _, _ = get_batch(config, device, device_type, data_iter=train_iter)

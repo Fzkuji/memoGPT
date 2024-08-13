@@ -2,11 +2,7 @@ import os
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer
-from datasets import load_dataset
-
-import itertools
+from torch.utils.data import Dataset
 
 
 class CustomDataset(Dataset):
@@ -76,7 +72,6 @@ class CustomDataset(Dataset):
             self.dataset = sorted(self.dataset, key=lambda x: len(x[key]), reverse=True)
 
     def filter_by_length(self, max_length, keys):
-
         # 过滤 keys 字段长度之和超过max_length的样本 同时避免出现空样本
         self.dataset = self.dataset.filter(
             lambda x:
@@ -85,7 +80,6 @@ class CustomDataset(Dataset):
                 for key in keys
             ) <= max_length
         )
-
 
 
 # 定义自定义collate_fn

@@ -20,6 +20,8 @@ wandb_run_name = 'ft-' + str(time.time())
 # 数据和初始化
 dataset = 'fineweb'  # fineweb, shakespeare, openwebtext
 train_mode = 'sft'  # pretrain, sft
+if train_mode == 'sft':
+    data_path = 'neural-bridge/rag-dataset-12000'  # Open-Orca/OpenOrca, neural-bridge/rag-dataset-12000
 init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2- 0.5B-Instruct', 'resume'
 
 # 检查点设置

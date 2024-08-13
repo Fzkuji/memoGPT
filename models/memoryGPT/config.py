@@ -74,7 +74,6 @@ class GPTConfig:
 
 @dataclass
 class TrainConfig(GPTConfig):
-
     seed: int = 1337
 
     config_file: str = 'configs/finetune_gpt2.py'
@@ -93,6 +92,7 @@ class TrainConfig(GPTConfig):
     # 数据和初始化
     dataset: str = 'openwebtext'
     train_mode: str = 'sft'
+    data_path: str = 'neural-bridge/rag-dataset-12000'
     init_from: str = 'Qwen/Qwen2-0.5B-Instruct'
     data_dir: str = 'data'
 
