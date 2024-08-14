@@ -9,10 +9,10 @@ seed = 1337
 # 输出和日志
 out_dir = 'out-owt'
 eval_interval = 200
-eval_iters = 100
+eval_iters = 200
 eval_only = False
 
-log_interval = 10
+log_interval = 2
 wandb_log = False  # Feel free to turn on
 wandb_project = 'owt'
 wandb_run_name = 'ft-' + str(time.time())
@@ -28,8 +28,8 @@ init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2- 0.5B-Instruct', 'resume'
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
 
 # 训练参数
-batch_size = 8
-gradient_accumulation_steps = 8
+batch_size = 1
+gradient_accumulation_steps = 4
 max_iters = 60000
 lr_decay_iters = 10000
 warmup_iters = 200  # how many steps to warm up for

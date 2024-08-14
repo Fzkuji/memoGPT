@@ -203,10 +203,10 @@ elif config.train_mode == 'sft':
     val_dataset = CustomDataset(dataset['val'], tokenizer, fields=fields)
 
     # train_dataset 按照文本 answer 的长度进行排序
-    # train_dataset.sort(key='response')
-    train_dataset.filter_by_length(max_length=1024, keys=[fields[2],])
+    train_dataset.filter_by_length(max_length=2048, keys=[fields[2], ])
+    train_dataset.sort([fields[2], fields[0]])
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=lambda x: collate_fn(x, tokenizer), shuffle=True)
 
     # 使用无限迭代器
@@ -239,49 +239,49 @@ while True:
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        # # evaluate the loss on train/val sets and write checkpoints
-        # if iter_num % config.eval_interval == 0 and master_process:
-        #     losses = estimate_loss(
-        #         config,
-        #         model,
-        #         ctx,
-        #         device,
-        #         device_type,
-        #         iter_num,
-        #         dataiter=val_iter if config.train_mode == 'sft' else None
-        #     )
-        #     print(
-        #         f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
-        #     print(f"train segment loss: {losses['train_segment_loss']}, val segment loss: {losses['val_segment_loss']}")
-        #     if config.wandb_log:
-        #         wandb.log({
-        #             "iter": iter_num,
-        #             "train/loss": losses['train'],
-        #             "val/loss": losses['val'],
-        #             "train/perplexity": losses['train_perplexity'],
-        #             "val/perplexity": losses['val_perplexity'],
-        #             "lr": lr,
-        #             "mfu": running_mfu * 100,  # convert to percentage
-        #         })
-        #     if losses['val'] < best_val_loss or config.always_save_checkpoint:
-        #         if iter_num > 0:
-        #             checkpoint = {
-        #                 'model': raw_model.state_dict(),
-        #                 'optimizer': optimizer.state_dict(),
-        #                 'model_args': model_args,
-        #                 'iter_num': iter_num,
-        #                 'best_val_loss': best_val_loss,
-        #                 'configs': config_dict,
-        #             }
-        #             if losses['val'] < best_val_loss:
-        #                 print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
-        #                 torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
-        #                 best_val_loss = losses['val']
-        #             if config.always_save_checkpoint:
-        #                 print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
-        #                 torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
-        # if iter_num == 0 and config.eval_only:
-        #     break
+        # evaluate the loss on train/val sets and write checkpoints
+        if iter_num % config.eval_interval == 0 and master_process:
+            losses = estimate_loss(
+                config,
+                model,
+                ctx,
+                device,
+                device_type,
+                iter_num,
+                dataiter=val_iter if config.train_mode == 'sft' else None
+            )
+            print(
+                f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
+            print(f"train segment loss: {losses['train_segment_loss']}, val segment loss: {losses['val_segment_loss']}")
+            if config.wandb_log:
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "train/perplexity": losses['train_perplexity'],
+                    "val/perplexity": losses['val_perplexity'],
+                    "lr": lr,
+                    "mfu": running_mfu * 100,  # convert to percentage
+                })
+            if losses['val'] < best_val_loss or config.always_save_checkpoint:
+                if iter_num > 0:
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'model_args': model_args,
+                        'iter_num': iter_num,
+                        'best_val_loss': best_val_loss,
+                        'configs': config_dict,
+                    }
+                    if losses['val'] < best_val_loss:
+                        print(f"saving checkpoint to {config.out_dir} with name ckpt.pt")
+                        torch.save(checkpoint, os.path.join(config.out_dir, 'ckpt.pt'))
+                        best_val_loss = losses['val']
+                    if config.always_save_checkpoint:
+                        print(f"saving checkpoint to {config.out_dir} with name {iter_num}.pt")
+                        torch.save(checkpoint, os.path.join(config.out_dir, f'{iter_num}.pt'))
+        if iter_num == 0 and config.eval_only:
+            break
 
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         # and using the GradScaler if data type is float16
@@ -297,6 +297,7 @@ while True:
                 # mask[:, -config.memory_block_size:] = 1
                 _, loss, _ = model(input_ids=X, labels=Y, attention_mask=masks)
                 loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
+                trained_tokens = masks.sum().item()
 
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
@@ -320,11 +321,11 @@ while True:
         if iter_num % config.log_interval == 0 and master_process:
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            lossf = loss.item() * config.gradient_accumulation_steps
+            lossf = loss.item() * config.gradient_accumulation_steps / trained_tokens
             if local_iter_num >= 5:  # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
+            print(f"iter {iter_num}: loss per token {lossf:.4f}, tokens {trained_tokens},time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
         iter_num += 1
         local_iter_num += 1
 

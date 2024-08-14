@@ -10,11 +10,7 @@ class CustomDataset(Dataset):
         """
 
         Args:
-            dataset: DatasetDict({
-                'train': train_valtest['train'],
-                'val': val_test['train'],
-                'test': val_test['test'],
-            })
+            dataset: datasets.arrow_dataset.Dataset
             tokenizer:
         """
 
@@ -23,7 +19,7 @@ class CustomDataset(Dataset):
         self.fields = fields
 
         # 删除回答为空的样本
-        self.dataset = self.dataset.filter(lambda x: x[self.fields[2]] != "")
+        self.dataset = self.dataset.filter(lambda x: x[self.fields[2]] is not None)
 
     def __len__(self):
         return len(self.dataset)
@@ -31,45 +27,47 @@ class CustomDataset(Dataset):
     def __getitem__(self, idx):
         row = self.dataset[idx]
 
-        system = row[self.fields[0]] if row[self.fields[0]] is not None else ""
-        question = row[self.fields[1]] if row[self.fields[1]] is not None else ""
-        response = row[self.fields[2]] if row[self.fields[2]] is not None else ""
+        system = {"role": "system", "content": row[self.fields[0]] if row[self.fields[0]] is not None else ""}
+        question = {"role": "user", "content": row[self.fields[1]] if row[self.fields[1]] is not None else ""}
+        response = {"role": "assistant", "content": row[self.fields[2]] if row[self.fields[2]] is not None else ""}
 
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": response},
-        ]
+        text = self.tokenizer.apply_chat_template([system, question, response], tokenize=False, add_special_tokens=False)
 
-        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_special_tokens=False)
+        sq_text = self.tokenizer.apply_chat_template([system, question], tokenize=False, add_special_tokens=False)
 
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": question},
-        ]
-
-        question = self.tokenizer.apply_chat_template(messages, tokenize=False, add_special_tokens=False)
-
-        # # 将文本用 "assistant\n" 分为问题和回答两部分 同时 "assistant\n" 本身放在 question 的最后
-        # question, response = text.split("assistant\n")
-        # question += "assistant\n"
+        """
+        记录一下, 这里如果system为空, 会导致tokenizer自行增加一段文本, 导致长度不一致
+        比如如果system为空, tokenizer会自动增加 "You are a helpful assistant."
+        因此, answer需要通过text去掉前面system_question的长度来获取
+        """
+        a_text = text[len(sq_text):]
 
         # 输入去掉第最后一个token
         input_ids = self.tokenizer.encode(text, add_special_tokens=False)[:-1]
         # 输出去掉第一个token
         output_ids = self.tokenizer.encode(text, add_special_tokens=False)[1:]
-        # 计算问题的长度
-        question_len = len(self.tokenizer.encode(question, add_special_tokens=False))
+
+        # system_question和answer及其长度
+        sq_ids = self.tokenizer.encode(sq_text, add_special_tokens=False)
+        system_question_len = len(sq_ids)
+        a_ids = self.tokenizer.encode(a_text, add_special_tokens=False)
+        answer_len = len(a_ids)
+        # 计算整体的长度
+        text_len = len(input_ids) + 1
+        assert text_len == system_question_len + answer_len, f"{text_len} != {system_question_len} + {answer_len}"
 
         return {
             'input_ids': input_ids,
             'output_ids': output_ids,
-            'question_len': question_len,
+            'system_question_ids': sq_ids,
+            'answer_ids': a_ids,
+            'system_question_len': system_question_len,
+            'answer_len': answer_len,
         }
 
     def sort(self, keys):
         for key in keys:
-            self.dataset = sorted(self.dataset, key=lambda x: len(x[key]), reverse=True)
+            self.dataset = sorted(self.dataset, key=lambda x: len(x[key]), reverse=False)
 
     def filter_by_length(self, max_length, keys):
         # 过滤 keys 字段长度之和超过max_length的样本 同时避免出现空样本
@@ -86,7 +84,7 @@ class CustomDataset(Dataset):
 def collate_fn(batch, tokenizer):
     batch_input_ids = [item['input_ids'] for item in batch]
     batch_output_ids = [item['output_ids'] for item in batch]
-    question_lengths = [item['question_len'] for item in batch]
+    question_lengths = [item['system_question_len'] for item in batch]
 
     max_len = max(max(len(ids) for ids in batch_input_ids), max(len(ids) for ids in batch_output_ids))
 
