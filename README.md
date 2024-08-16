@@ -30,7 +30,7 @@ Dependencies:
 If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
 
 ```shell
-python data/shakespeare_char/prepare.py
+python data/shakespeare_char/prepare4gpt2.py
 ```
 
 This creates a `train.bin` and `val.bin` in that data directory. Now it is time to train your GPT. The size of it very much depends on the computational resources of your system:
@@ -102,7 +102,7 @@ Finally, on Apple Silicon Macbooks and with a recent PyTorch version make sure t
 A more serious deep learning professional may be more interested in reproducing GPT-2 results. So here we go - we first tokenize the dataset, in this case the [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/), an open reproduction of OpenAI's (private) WebText:
 
 ```shell
-python data/openwebtext/prepare.py
+python data/openwebtext/prepare4gpt2.py
 ```
 
 This downloads and tokenizes the [OpenWebText](https://huggingface.co/datasets/openwebtext) dataset. It will create a `train.bin` and `val.bin` which holds the GPT2 BPE token ids in one sequence, stored as raw uint16 bytes. Then we're ready to kick off training. To reproduce GPT-2 (124M) you'll want at least an 8X A100 40GB node and run:

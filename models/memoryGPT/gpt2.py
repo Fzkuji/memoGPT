@@ -269,6 +269,8 @@ class GPT(nn.Module):
                                                  intermediate_size=8960, vocab_size=151936, torch_dtype=torch.bfloat16),
                 'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
                                                intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16),
+                'Qwen/Qwen2-7B': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
+                                               intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16),
             }[model_type]
             config_args['bias'] = True  # always True for GPT model checkpoints
             # add all args from override_args to config_args

@@ -9,7 +9,7 @@ seed = 1337
 # 输出和日志
 out_dir = 'out-owt'
 eval_interval = 200
-eval_iters = 200
+eval_iters = 2
 eval_only = False
 
 log_interval = 10
@@ -18,11 +18,12 @@ wandb_project = 'memoGPT'
 wandb_run_name = 'pretrain-' + str(time.time())
 
 # 数据和初始化
-dataset = 'openwebtext'  # fineweb, shakespeare, openwebtext
-train_mode = 'sft'  # pretrain, sft
+train_mode = 'pretrain'  # pretrain, sft
 if train_mode == 'sft':
     data_path = 'neural-bridge/rag-dataset-12000'  # Open-Orca/OpenOrca, neural-bridge/rag-dataset-12000
-init_from = 'Qwen/Qwen2-7B'  # 'Qwen/Qwen2- 0.5B-Instruct', 'resume'
+else:
+    dataset = 'openwebtext'  # fineweb, shakespeare, openwebtext
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 'Qwen/Qwen2-7B'
 
 # 检查点设置
 always_save_checkpoint = True  # Only save checkpoints if the validation loss improves
@@ -47,8 +48,8 @@ long_term_memory_layer = 1
 long_term_memory_chunk_size = 128
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 32
-memory_block_size = 32
+input_block_size = 64
+memory_block_size = 64
 train_size_ratio = 32  # 32
 val_size_ratio = 32  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio

@@ -24,7 +24,7 @@ from models.memoryGPT.config import GPTConfig, TrainConfig
 """
 
 # 从配置文件加载配置
-config_file = 'configs/finetune.py'
+config_file = 'configs/pretrain.py'
 config_vars = {}
 with open(config_file, 'r', encoding='utf-8') as f:
     exec(f.read(), {}, config_vars)
@@ -147,24 +147,24 @@ print(config)
 """
 使用Lora代码
 """
-from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
-
-peft_config = LoraConfig(
-    inference_mode=False,
-    r=8,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    target_modules=[
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-    ],
-    task_type=TaskType.CAUSAL_LM,
-)
-
-model = get_peft_model(model, peft_config).to(device)
-model.print_trainable_parameters()
+# from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+#
+# peft_config = LoraConfig(
+#     inference_mode=False,
+#     r=8,
+#     lora_alpha=32,
+#     lora_dropout=0.1,
+#     target_modules=[
+#         "q_proj",
+#         "k_proj",
+#         "v_proj",
+#         "o_proj",
+#     ],
+#     task_type=TaskType.CAUSAL_LM,
+# )
+#
+# model = get_peft_model(model, peft_config).to(device)
+# model.print_trainable_parameters()
 
 # 打印模型
 model.to(device)
@@ -332,7 +332,7 @@ while True:
                 # mask[:, -config.memory_block_size:] = 1
                 _, loss, _ = model(input_ids=X, labels=Y, attention_mask=masks)
                 loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
-                trained_tokens = masks.sum().item()
+                trained_tokens = masks.sum().item() if config.train_mode == 'sft' else config.batch_size * config.train_size
 
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
@@ -356,11 +356,12 @@ while True:
         if iter_num % config.log_interval == 0 and master_process:
             # get loss as float. note: this is a CPU-GPU sync point
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-            lossf = loss.item() * config.gradient_accumulation_steps / trained_tokens
+            lossf = loss.item() * config.gradient_accumulation_steps
+            losspt = lossf / trained_tokens
             if local_iter_num >= 5:  # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-            print(f"iter {iter_num}: loss per token {lossf:.4f}, tokens {trained_tokens},time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
+            print(f"iter {iter_num}: loss {lossf:.4f}, loss per token {losspt:.4f}, tokens {trained_tokens},time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
         iter_num += 1
         local_iter_num += 1
 

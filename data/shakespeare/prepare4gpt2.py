@@ -2,7 +2,6 @@ import os
 import requests
 import tiktoken
 import numpy as np
-from transformers import AutoTokenizer
 
 # download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
@@ -17,10 +16,8 @@ n = len(data)
 train_data = data[:int(n*0.9)]
 val_data = data[int(n*0.9):]
 
-# encode with AutoTokenizer
-enc = AutoTokenizer.from_pretrained(
-    "Qwen/Qwen2-1.5B",
-)
+# encode with tiktoken gpt2 bpe
+enc = tiktoken.get_encoding("gpt2")
 train_ids = enc.encode_ordinary(train_data)
 val_ids = enc.encode_ordinary(val_data)
 print(f"train has {len(train_ids):,} tokens")
