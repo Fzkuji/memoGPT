@@ -19,6 +19,10 @@ from models.memoryGPT.gpt2 import GPT
 from models.memoryGPT.config import GPTConfig, TrainConfig
 
 
+"""
+配置文件加载代码
+"""
+
 # 从配置文件加载配置
 config_file = 'configs/finetune_gpt2.py'
 config_vars = {}
@@ -70,6 +74,11 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 config_dict['data_dir'] = os.path.join('data', config.dataset)
 config.data_dir = config_dict['data_dir']
 print(f"load data from {config_dict['data_dir']}")
+
+
+"""
+模型初始化代码
+"""
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -135,9 +144,35 @@ for k, v in model_args.items():
 # 现在可以使用 config.参数名 来访问配置了
 print(config)
 
-model.to(device)
+"""
+使用Lora代码
+"""
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 
+peft_config = LoraConfig(
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+    target_modules=[
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+    ],
+    task_type=TaskType.CAUSAL_LM,
+)
+
+model = get_peft_model(model, peft_config).to(device)
+model.print_trainable_parameters()
+
+# 打印模型
+model.to(device)
 print(model)
+
+"""
+训练模型代码
+"""
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(config.dtype == 'float16'))

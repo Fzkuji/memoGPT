@@ -26,8 +26,8 @@ def estimate_loss(config, model, ctx, device, device_type, iter_num, dataiter=No
                     # import time
                     # start = time.time()
                     _, loss, segment_loss = model(
-                        input_x,
-                        label_y,
+                        input_ids=input_x,
+                        labels=label_y,
                         attention_mask=masks,
                         cal_segment_loss=True,
                     )
@@ -62,8 +62,8 @@ def estimate_loss(config, model, ctx, device, device_type, iter_num, dataiter=No
                     # import time
                     # start = time.time()
                     _, loss, segment_loss = model(
-                        input_x,
-                        label_y,
+                        input_ids=input_x,
+                        labels=label_y,
                         attention_mask=masks,
                         cal_segment_loss=True,
                     )

@@ -18,7 +18,7 @@ num_proc = 8
 num_proc_load_dataset = num_proc
 
 enc = AutoTokenizer.from_pretrained(
-    "Qwen/Qwen2-0.5B-Instruct",
+    "Qwen/Qwen2-1.5B",
 )
 
 if __name__ == '__main__':
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         filename = os.path.join(os.path.dirname(__file__), f'{split}.bin')
         dtype = np.uint16  # (can do since enc.max_token_value == 50256 is < 2**16)
         arr = np.memmap(filename, dtype=dtype, mode='w+', shape=(arr_len,))
-        total_batches = 1024
+        total_batches = 256
 
         idx = 0
         for batch_idx in tqdm(range(total_batches), desc=f'writing {filename}'):
