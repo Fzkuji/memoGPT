@@ -24,7 +24,7 @@ from models.memoryGPT.config import GPTConfig, TrainConfig
 """
 
 # 从配置文件加载配置
-config_file = 'configs/finetune_gpt2.py'
+config_file = 'configs/finetune.py'
 config_vars = {}
 with open(config_file, 'r', encoding='utf-8') as f:
     exec(f.read(), {}, config_vars)

@@ -76,7 +76,7 @@ class GPTConfig:
 class TrainConfig(GPTConfig):
     seed: int = 1337
 
-    config_file: str = 'configs/finetune_gpt2.py'
+    config_file: str = 'configs/finetune.py'
 
     # 输出和日志
     out_dir: str = 'out-owt'
