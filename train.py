@@ -291,10 +291,10 @@ while True:
             if config.wandb_log:
                 wandb.log({
                     "iter": iter_num,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "train/perplexity": losses['train_perplexity'],
-                    "val/perplexity": losses['val_perplexity'],
+                    "eval train loss": losses['train'],
+                    "eval val loss": losses['val'],
+                    "eval train perplexity": losses['train_perplexity'],
+                    "eval val perplexity": losses['val_perplexity'],
                     "lr": lr,
                     "mfu": running_mfu * 100,  # convert to percentage
                 })
@@ -332,7 +332,7 @@ while True:
                 # mask[:, -config.memory_block_size:] = 1
                 _, loss, _ = model(input_ids=X, labels=Y, attention_mask=masks)
                 loss = loss / config.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
-                trained_tokens = masks.sum().item() if config.train_mode == 'sft' else config.batch_size * config.train_size
+                trained_tokens = masks.sum().item() if config.train_mode == 'sft' else config.train_size
 
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y, masks = get_batch(config, device, device_type, data_iter=train_iter)
@@ -362,6 +362,16 @@ while True:
                 mfu = raw_model.estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
             print(f"iter {iter_num}: loss {lossf:.4f}, loss per token {losspt:.4f}, tokens {trained_tokens},time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
+            if config.wandb_log:
+                wandb.log({
+                    "iter": iter_num,
+                    "loss": lossf,
+                    "loss per token": losspt,
+                    "tokens": trained_tokens,
+                    "time per step": dt * 1000,
+                    "lr": lr,
+                    "mfu": running_mfu * 100,  # convert to percentage
+                })
         iter_num += 1
         local_iter_num += 1
 
