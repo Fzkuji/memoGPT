@@ -291,13 +291,22 @@ while True:
             if config.wandb_log:
                 wandb.log({
                     "iter": iter_num,
-                    "eval train loss": losses['train'],
-                    "eval val loss": losses['val'],
-                    "eval train perplexity": losses['train_perplexity'],
-                    "eval val perplexity": losses['val_perplexity'],
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "train/perplexity": losses['train_perplexity'],
+                    "val/perplexity": losses['val_perplexity'],
                     "lr": lr,
                     "mfu": running_mfu * 100,  # convert to percentage
                 })
+                # wandb.log({
+                #     "iter": iter_num,
+                #     "eval train loss": losses['train'],
+                #     "eval val loss": losses['val'],
+                #     "eval train perplexity": losses['train_perplexity'],
+                #     "eval val perplexity": losses['val_perplexity'],
+                #     "lr": lr,
+                #     "mfu": running_mfu * 100,  # convert to percentage
+                # })
             if losses['val'] < best_val_loss or config.always_save_checkpoint:
                 if iter_num > 0:
                     checkpoint = {
