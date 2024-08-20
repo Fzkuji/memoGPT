@@ -18,7 +18,7 @@ num_proc = 8
 num_proc_load_dataset = num_proc
 
 enc = AutoTokenizer.from_pretrained(
-    "Qwen/Qwen2-0.5B-Instruct",
+    "Qwen/Qwen2-0.5B-Instruct",  # "Qwen/Qwen2-7B-Instruct", "Qwen/Qwen2-0.5B", "Qwen/Qwen2-7B"
 )
 
 if __name__ == '__main__':

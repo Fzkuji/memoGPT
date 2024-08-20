@@ -46,6 +46,9 @@ num_key_value_heads = 2
 short_term_memory_size = 1
 long_term_memory_layer = 1
 long_term_memory_chunk_size = 64
+long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
+                         [short_term_memory_size * (long_term_memory_chunk_size - 1)])
+
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
 input_block_size = 64

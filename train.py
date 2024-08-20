@@ -30,7 +30,7 @@ with open(config_file, 'r', encoding='utf-8') as f:
     exec(f.read(), {}, config_vars)
 
 # 将配置文件中的所有变量加载到config对象中
-config_dict = {k: v for k, v in config_vars.items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))}
+config_dict = {k: v for k, v in config_vars.items() if not k.startswith('_') and isinstance(v, (int, float, bool, str, list))}
 train_config_fields = {field.name for field in fields(TrainConfig)}
 filtered_config_dict = {k: v for k, v in config_dict.items() if k in train_config_fields}
 config = TrainConfig(**filtered_config_dict)

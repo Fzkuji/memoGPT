@@ -1,5 +1,5 @@
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -13,8 +13,7 @@ class GPTConfig:
     short_term_memory_size: int = 16
     long_term_memory_layer: int = 16
     long_term_memory_chunk_size: int = 4
-    long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] * (long_term_memory_layer - 1) +
-                             [short_term_memory_size * (long_term_memory_chunk_size - 1)])
+    long_term_memory_size: list = field(default_factory=list)
 
     rope_theta: int = 500000
     rms_norm_eps: float = 1e-6
