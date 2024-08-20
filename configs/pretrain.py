@@ -32,7 +32,7 @@ always_save_checkpoint = True  # Only save checkpoints if the validation loss im
 batch_size = 6
 gradient_accumulation_steps = 4
 max_iters = 60000
-lr_decay_iters = 1000
+lr_decay_iters = 500
 warmup_iters = 200  # how many steps to warm up for
 
 # 模型参数

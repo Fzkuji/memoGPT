@@ -9,7 +9,7 @@ zstandard
 fairscale
 fire
 tiktoken
-blobfile
+# blobfile
 accelerate
 bitsandbytes
 notebook
