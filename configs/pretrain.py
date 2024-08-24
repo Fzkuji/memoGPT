@@ -15,7 +15,7 @@ eval_only = False
 log_interval = 10
 wandb_log = True  # Feel free to turn on
 wandb_project = 'memoGPT'
-wandb_run_name = 'pretrain-32-64-1024'
+wandb_run_name = 'pretrain-64-1024'
 
 # 数据和初始化
 train_mode = 'pretrain'  # pretrain, sft
@@ -66,8 +66,8 @@ val_size = memory_block_size * val_size_ratio
 rope_theta = 1000000.0
 
 # 优化器参数
-learning_rate = 4e-4
-decay_lr = True
+learning_rate = 3e-5
+decay_lr = False
 min_lr = 3e-5
 
 # 额外的模型配置
