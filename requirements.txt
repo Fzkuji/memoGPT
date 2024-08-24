@@ -17,7 +17,7 @@ trl
 peft
 nvitop
 wandb
-datatrove
+# datatrove
 pandas
 jsonlines
 nltk
