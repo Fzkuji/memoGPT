@@ -224,6 +224,10 @@ class MemorySelfAttention(nn.Module):
             k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
             v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
+
+            print('kv_seq_len: ', k.shape[-2])
+            print('q_seq_len: ', q.shape[-2])
+
             kv_seq_len = k.shape[-2]
             cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
             # position_ids 为 short_term_memory 到 short_term_memory + T 的位置

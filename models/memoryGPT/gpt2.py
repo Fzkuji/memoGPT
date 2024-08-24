@@ -103,7 +103,7 @@ class GPT(nn.Module):
         self.tokens_left_to_update_memory = self.config.input_block_size
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.init_from,
-            cache_dir='.cache/huggingface/hub',
+            # cache_dir='.cache/huggingface/hub',
         )
 
     def get_num_params(self, non_embedding=True):
@@ -136,7 +136,9 @@ class GPT(nn.Module):
             # print("Initializing short-term memory...")
 
             # 创建一个初始化输入idx，值都是<|im_start|>，也就是151644
-            short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size), self.tokenizer.eos_token_id, dtype=torch.long, device=input_ids.device)
+            short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size),
+                                                    self.tokenizer.eos_token_id, dtype=torch.long,
+                                                    device=input_ids.device)
 
             # 将初始化输入idx传入模型
             output = self.model.embed_tokens(short_term_memory_init_idx)
@@ -170,7 +172,8 @@ class GPT(nn.Module):
 
         # 如果是训练 targets不为空 则创建logits保存预测结果
         if labels is not None:
-            logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device, dtype=self.config.torch_dtype)
+            logits = torch.zeros((batch_size, input_len, self.config.vocab_size), device=tok_emb.device,
+                                 dtype=self.config.torch_dtype)
 
         output_start_pos = 0
         while end_pos < seq_len:
@@ -206,9 +209,10 @@ class GPT(nn.Module):
 
             # 当targets不为空且当前块的mask有1时，才保存logits
             if labels is not None:
-                if attention_mask is None or attention_mask[:, output_start_pos:output_start_pos+predict_len].sum() > 0:
+                if attention_mask is None or attention_mask[:,
+                                             output_start_pos:output_start_pos + predict_len].sum() > 0:
                     output = self.lm_head(self.model.norm(output))
-                    logits[:, output_start_pos:output_start_pos+predict_len, :] = output[:, -predict_len:, :]
+                    logits[:, output_start_pos:output_start_pos + predict_len, :] = output[:, -predict_len:, :]
             else:
                 logits = self.lm_head(self.model.norm(output))[:, [-1], :]
             output_start_pos += predict_len
@@ -230,7 +234,9 @@ class GPT(nn.Module):
 
                 # 不确定什么长度，每个 memory_block_size 长度计算一次 loss
                 for i in range(0, input_len, memory_block_size):
-                    segment_loss.append(F.cross_entropy(logits[i:i+memory_block_size, :], labels[i:i + memory_block_size], ignore_index=-1))
+                    segment_loss.append(
+                        F.cross_entropy(logits[i:i + memory_block_size, :], labels[i:i + memory_block_size],
+                                        ignore_index=-1))
 
                 # concert segment_losses to tensor
                 segment_loss = torch.stack(segment_loss)
@@ -255,67 +261,75 @@ class GPT(nn.Module):
 
     @classmethod
     def from_pretrained(cls, model_type, override_args):
-        if "gpt2" in model_type:
-            pass
-        elif "Qwen" in model_type:
-            from transformers import Qwen2ForCausalLM
-            print(f"loading weights from pretrained {model_type}")
+        from transformers import AutoModelForCausalLM
+        print(f"loading weights from pretrained {model_type}")
 
-            # n_layer, n_head and n_embd are determined from model_type
-            config_args = {
-                'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, num_attention_heads=14, num_key_value_heads=2, n_embd=896,
-                                                 intermediate_size=4864, vocab_size=151936, torch_dtype=torch.bfloat16),
-                'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=28, num_attention_heads=12, num_key_value_heads=2, n_embd=1536,
-                                                 intermediate_size=8960, vocab_size=151936, torch_dtype=torch.bfloat16),
-                'Qwen/Qwen2-7B-Instruct': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
-                                               intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16),
-                'Qwen/Qwen2-7B': dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584,
-                                               intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16),
-            }[model_type]
-            config_args['bias'] = True  # always True for GPT model checkpoints
-            # add all args from override_args to config_args
-            override_args.update(config_args)
+        # n_layer, n_head and n_embd are determined from model_type
+        config_args = {
+            'Qwen/Qwen2-0.5B-Instruct': dict(n_layer=24, num_attention_heads=14, num_key_value_heads=2, n_embd=896, intermediate_size=4864, vocab_size=151936, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
+            'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=28, num_attention_heads=12, num_key_value_heads=2, n_embd=1536, intermediate_size=8960, vocab_size=151936, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
+            'Qwen/Qwen2-7B-Instruct':   dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584, intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
+            'Qwen/Qwen2-7B':            dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584, intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
+            'meta-llama/Llama-2-7b-chat-hf': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=32, n_embd=4096, intermediate_size=11008, vocab_size=32000, torch_dtype=torch.float16, rms_norm_eps=1e-05, bias=False),
+            'meta-llama/Meta-Llama-3.1-8B-Instruct': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=8, n_embd=4096, intermediate_size=14336, vocab_size=128256, torch_dtype=torch.bfloat16, rms_norm_eps=1e-05, bias=False),
+        }[model_type]
+        config_args['model_type'] = model_type  # always True for GPT model checkpoints
+        # add all args from override_args to config_args
+        override_args.update(config_args)
 
-            # 过滤掉不需要的参数
-            override_args = {k: v for k, v in override_args.items() if k in GPTConfig.__dataclass_fields__.keys()}
+        # 过滤掉不需要的参数
+        override_args = {k: v for k, v in override_args.items() if k in GPTConfig.__dataclass_fields__.keys()}
 
-            # create a from-scratch initialized minGPT model
-            config = GPTConfig(**override_args)
-            model = GPT(config)
+        # create a from-scratch initialized minGPT model
+        config = GPTConfig(**override_args)
+        model = GPT(config)
 
-            # change model dtype to torch_dtype
-            # model = model.to(dtype)
+        # change model dtype to torch_dtype
+        # model = model.to(dtype)
 
-            sd = model.state_dict()
-            sd_keys = sd.keys()
-            sd_keys = [k for k in sd_keys if
-                       not k.endswith('.self_attn.bias')]  # discard this mask / buffer, not a param
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.self_attn.bias')]  # discard this mask / buffer, not a param
 
-            # init a huggingface/transformers model
-            model_hf = Qwen2ForCausalLM.from_pretrained(
-                model_type,
-                cache_dir='.cache/huggingface/hub',
-            )
-            sd_hf = model_hf.state_dict()
+        # init a huggingface/transformers model
+        model_hf = AutoModelForCausalLM.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
 
-            # copy while ensuring all of the parameters are aligned and match in names and shapes
-            sd_keys_hf = sd_hf.keys()
-            sd_keys_hf = [k for k in sd_keys_hf if
-                          not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
-            sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.bias')]  # same, just the mask (buffer)
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.masked_bias')]  # ignore these, just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.self_attn.bias')]  # same, just the mask (buffer)
 
-            assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        """Test Parameters (For Debugging)
+        Find and print the mismatched key names
+        """
+        # print(sd_keys)
+        # print(sd_keys_hf)
+        #
+        # # fine keys in sd that are not in sd_hf
+        # missing_keys = [k for k in sd_keys if k not in sd_keys_hf]
+        # print(f"missing keys: {missing_keys}")
+        #
+        # # find keys in sd_hf that are not in sd
+        # extra_keys = [k for k in sd_keys_hf if k not in sd_keys]
+        # print(f"extra keys: {extra_keys}")
 
-            for k in sd_keys_hf:
-                # vanilla copy over the other parameters
-                # print shape mismatches
-                if sd[k].shape != sd_hf[k].shape:
-                    print(f"shape mismatch: {k} shape {sd[k].shape} != {sd_hf[k].shape}")
-                assert sd_hf[k].shape == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
-            print("loaded successfully")
-            return model
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+
+        """
+        Copy Parameters
+        """
+
+        for k in sd_keys_hf:
+            # vanilla copy over the other parameters
+            # print shape mismatches
+            if sd[k].shape != sd_hf[k].shape:
+                print(f"shape mismatch: {k} shape {sd[k].shape} != {sd_hf[k].shape}")
+            assert sd_hf[k].shape == sd[k].shape
+            with torch.no_grad():
+                sd[k].copy_(sd_hf[k])
+        print("loaded successfully")
+        return model
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
@@ -360,7 +374,8 @@ class GPT(nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens=400, eos_token_id=None, temperature=0.3, top_k=None, output_type="str", **kwargs):
+    def generate(self, input_ids, max_new_tokens=400, eos_token_id=None, temperature=0.3, top_k=None, output_type="str",
+                 **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence indefinitely, feeding the predictions back into the model each time.
@@ -370,7 +385,7 @@ class GPT(nn.Module):
         from transformers import AutoTokenizer
         enc = AutoTokenizer.from_pretrained(
             self.config.init_from,
-            add_special_tokens=False,
+            # add_special_tokens=False,
         )
 
         # 判断输入idx是否为字符串

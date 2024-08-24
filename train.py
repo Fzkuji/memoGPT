@@ -216,7 +216,7 @@ elif config.train_mode == 'sft':
     dataset = load_dataset(
         config.data_path,  # Open-Orca/OpenOrca, neural-bridge/rag-dataset-12000
         split="train",
-        cache_dir='.cache/huggingface/datasets',
+        # cache_dir='.cache/huggingface/datasets',
     )
 
     if config.data_path == 'Open-Orca/OpenOrca':
