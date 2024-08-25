@@ -25,7 +25,7 @@ elif train_mode == 'pretrain':
     dataset = 'openwebtext'  # fineweb, shakespeare, openwebtext
 
 # 模型初始化
-init_from = 'Qwen/Qwen2-7B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 'Qwen/Qwen2-7B', 'meta-llama/Llama-2-7b-chat-hf'
+init_from = 'meta-llama/Llama-2-7b-chat-hf'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 'Qwen/Qwen2-7B', 'meta-llama/Llama-2-7b-chat-hf'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
@@ -41,7 +41,7 @@ warmup_iters = 200  # how many steps to warm up for
 memory_dim = 896
 intermediate_size = 4864
 n_layer = 24
-n_embd = 896
+n_embd = hidden_size = 896
 num_attention_heads = 14
 num_key_value_heads = 2
 

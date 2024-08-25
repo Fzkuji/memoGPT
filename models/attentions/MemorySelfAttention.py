@@ -1,12 +1,16 @@
 import math
 
+from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from torch import nn
+from transformers import LlamaConfig, ROPE_INIT_FUNCTIONS
+from transformers.utils import logging
 
 from models.attentions.Memory import Memory
 from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis, apply_separate_rotary_emb
 
+logger = logging.get_logger(__name__)
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
@@ -16,8 +20,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-# Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """Applies Rotary Position Embedding to the query and key tensors.
 
     Args:
@@ -25,9 +28,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
         k (`torch.Tensor`): The key tensor.
         cos (`torch.Tensor`): The cosine part of the rotary embedding.
         sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`):
-            The position indices of the tokens corresponding to the query and key tensors. For example, this can be
-            used to pass offsetted position ids when working with a KV-cache.
+        position_ids (`torch.Tensor`, *optional*):
+            Deprecated and unused.
         unsqueeze_dim (`int`, *optional*, defaults to 1):
             The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
             sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
@@ -38,75 +40,106 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     Returns:
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
 
-def apply_rotary_pos_emb_separately(q, cos, sin, position_ids, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors.
+def apply_rotary_pos_emb_separately(q, cos, sin, position_ids=None, unsqueeze_dim=1):
 
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`):
-            The position indices of the tokens corresponding to the query and key tensors. For example, this can be
-            used to pass offsetted position ids when working with a KV-cache.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     return q_embed
 
 
-# Copied from transformers.models.mixtral.modeling_mixtral.MixtralRotaryEmbedding with Mixtral->Qwen2
-class Qwen2RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+class LlamaRotaryEmbedding(nn.Module):
+    def __init__(
+        self,
+        dim=None,
+        max_position_embeddings=2048,
+        base=10000,
+        device=None,
+        scaling_factor=1.0,
+        rope_type="default",
+        config: Optional[LlamaConfig] = None,
+    ):
         super().__init__()
+        # TODO (joao): remove the `if` below, only used for BC
+        self.rope_kwargs = {}
+        if config is None:
+            logger.warning_once(
+                "`LlamaRotaryEmbedding` can now be fully parameterized by passing the model config through the "
+                "`config` argument. All other arguments will be removed in v4.45"
+            )
+            self.rope_kwargs = {
+                "rope_type": rope_type,
+                "factor": scaling_factor,
+                "dim": dim,
+                "base": base,
+                "max_position_embeddings": max_position_embeddings,
+            }
+            self.rope_type = rope_type
+            self.max_seq_len_cached = max_position_embeddings
+            self.original_max_seq_len = max_position_embeddings
+        else:
+            # BC: "rope_type" was originally "type"
+            if config.rope_scaling is not None:
+                self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
+            else:
+                self.rope_type = "default"
+            self.max_seq_len_cached = config.max_position_embeddings
+            self.original_max_seq_len = config.max_position_embeddings
 
-        self.dim = dim
-        self.max_position_embeddings = max_position_embeddings
-        self.base = base
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim))
+        self.config = config
+        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+
+        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, **self.rope_kwargs)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.original_inv_freq = self.inv_freq
 
-        # Build here to make `torch.jit.trace` work.
-        self._set_cos_sin_cache(
-            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
-        )
+    def _dynamic_frequency_update(self, position_ids, device):
+        """
+        dynamic RoPE layers should recompute `inv_freq` in the following situations:
+        1 - growing beyond the cached sequence length (allow scaling)
+        2 - the current sequence length is in the original scale (avoid losing precision with small sequences)
+        """
+        seq_len = torch.max(position_ids) + 1
+        if seq_len > self.max_seq_len_cached:  # growth
+            inv_freq, self.attention_scaling = self.rope_init_fn(
+                self.config, device, seq_len=seq_len, **self.rope_kwargs
+            )
+            self.register_buffer("inv_freq", inv_freq, persistent=False)  # TODO joao: may break with compilation
+            self.max_seq_len_cached = seq_len
 
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
-        self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
+        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:  # reset
+            self.register_buffer("inv_freq", self.original_inv_freq, persistent=False)
+            self.max_seq_len_cached = self.original_max_seq_len
 
-        freqs = torch.outer(t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+    @torch.no_grad()
+    def forward(self, x, position_ids):
+        if "dynamic" in self.rope_type:
+            self._dynamic_frequency_update(position_ids, device=x.device)
 
-    def forward(self, x, seq_len=None):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        if seq_len > self.max_seq_len_cached:
-            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        # Core RoPE block
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+        # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos = emb.cos()
+            sin = emb.sin()
 
-        return (
-            self.cos_cached[:seq_len].to(dtype=x.dtype),
-            self.sin_cached[:seq_len].to(dtype=x.dtype),
-        )
+        # Advanced RoPE types (e.g. yarn) apply a post-processing scaling factor, equivalent to scaling attention
+        cos = cos * self.attention_scaling
+        sin = sin * self.attention_scaling
+
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -156,11 +189,14 @@ class MemorySelfAttention(nn.Module):
             )
         )
 
-        self.rotary_emb = Qwen2RotaryEmbedding(
-            self.head_dim,
-            # max_position_embeddings=self.max_position_embeddings,
-            max_position_embeddings=32768,
-            base=config.rope_theta,
+        self.rotary_emb = LlamaRotaryEmbedding(
+            dim=self.n_embd,
+            max_position_embeddings=config.max_position_embeddings,
+            base=10000,
+            device=config.device,
+            scaling_factor=1.0,
+            rope_type="default",
+            config=config,
         )
 
     def forward(self, x, short_term_memory_init=False, update_memory=False):
@@ -181,12 +217,18 @@ class MemorySelfAttention(nn.Module):
                 q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
                 k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
                 v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+                # print("q shape: ", q.shape)
+                # print("k shape: ", k.shape)
+                # print("v shape: ", v.shape)
 
-                kv_seq_len = k.shape[-2]
+                position_ids = torch.arange(self.config.short_term_memory_size, device=x.device).expand(B, -1)
+                # print("position_ids shape: ", position_ids.shape)
 
-                cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
-                position_ids = torch.arange(self.config.short_term_memory_size, device=x.device).unsqueeze(0)
-                q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
+                cos, sin = self.rotary_emb(v, position_ids)
+                # print("cos shape: ", cos.shape)
+                # print("sin shape: ", sin.shape)
+
+                q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
                 # repeat k/v heads if n_kv_heads < n_heads
                 k = repeat_kv(k, self.num_key_value_groups)
@@ -223,22 +265,22 @@ class MemorySelfAttention(nn.Module):
             q = self.q_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
             k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
             v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            # print("q shape: ", q.shape)
+            # print("k shape: ", k.shape)
+            # print("v shape: ", v.shape)
 
+            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).expand(B, -1)
+            # print("position_ids shape: ", position_ids.shape)
 
-            print('kv_seq_len: ', k.shape[-2])
-            print('q_seq_len: ', q.shape[-2])
+            cos, sin = self.rotary_emb(v, position_ids)
+            # print("cos shape: ", cos.shape)
+            # print("sin shape: ", sin.shape)
 
-            kv_seq_len = k.shape[-2]
-            cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
-            # position_ids 为 short_term_memory 到 short_term_memory + T 的位置
-            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).unsqueeze(0)
-            k[:, :, -T:, :] = apply_rotary_pos_emb_separately(k[:, :, -T:, :], cos, sin, position_ids)
+            k[:, :, -T:, :] = apply_rotary_pos_emb_separately(k[:, :, -T:, :], cos, sin)
 
-            q_seq_len = q.shape[-2]
-            cos, sin = self.rotary_emb(q, seq_len=q_seq_len)
-            # position_ids 为 short_term_memory 到 short_term_memory + T 的位置
-            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).unsqueeze(0)
-            q[:, :, -T:, :] = apply_rotary_pos_emb_separately(q[:, :, -T:, :], cos, sin, position_ids)
+            position_ids = torch.arange(self.config.short_term_memory_size, self.config.short_term_memory_size + T, device=x.device).expand(B, -1,)
+            cos, sin = self.rotary_emb(q, position_ids)
+            q[:, :, -T:, :] = apply_rotary_pos_emb_separately(q[:, :, -T:, :], cos, sin)
 
             # repeat k/v heads if n_kv_heads < n_heads
             k = repeat_kv(k, self.num_key_value_groups)

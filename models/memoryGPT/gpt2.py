@@ -133,12 +133,14 @@ class GPT(nn.Module):
         # 初始化短期记忆
         if self.model.layers[0].self_attn.memory.short_term_memory.pool is None:
 
-            # print("Initializing short-term memory...")
+            print("Initializing short-term memory...")
 
             # 创建一个初始化输入idx，值都是<|im_start|>，也就是151644
             short_term_memory_init_idx = torch.full((batch_size, self.config.short_term_memory_size),
                                                     self.tokenizer.eos_token_id, dtype=torch.long,
                                                     device=input_ids.device)
+
+
 
             # 将初始化输入idx传入模型
             output = self.model.embed_tokens(short_term_memory_init_idx)
@@ -270,7 +272,9 @@ class GPT(nn.Module):
             'Qwen/Qwen2-1.5B-Instruct': dict(n_layer=28, num_attention_heads=12, num_key_value_heads=2, n_embd=1536, intermediate_size=8960, vocab_size=151936, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
             'Qwen/Qwen2-7B-Instruct':   dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584, intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
             'Qwen/Qwen2-7B':            dict(n_layer=28, num_attention_heads=28, num_key_value_heads=4, n_embd=3584, intermediate_size=18944, vocab_size=152064, torch_dtype=torch.bfloat16, rms_norm_eps=1e-06, bias=True),
-            'meta-llama/Llama-2-7b-chat-hf': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=32, n_embd=4096, intermediate_size=11008, vocab_size=32000, torch_dtype=torch.float16, rms_norm_eps=1e-05, bias=False),
+            'meta-llama/Llama-2-7b-chat-hf': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=32,
+                n_embd=4096, hidden_size=4096, intermediate_size=11008, vocab_size=32000, torch_dtype=torch.float16, rms_norm_eps=1e-05,
+                bias=False, rope_theta=10000.0, rope_scaling=None),
             'meta-llama/Meta-Llama-3.1-8B-Instruct': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=8, n_embd=4096, intermediate_size=14336, vocab_size=128256, torch_dtype=torch.bfloat16, rms_norm_eps=1e-05, bias=False),
         }[model_type]
         config_args['model_type'] = model_type  # always True for GPT model checkpoints
