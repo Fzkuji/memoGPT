@@ -25,7 +25,7 @@ elif train_mode == 'pretrain':
     dataset = 'openwebtext'  # fineweb, shakespeare, openwebtext
 
 # 模型初始化
-init_from = 'Qwen/Qwen2-7B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 'Qwen/Qwen2-7B', 'meta-llama/Llama-2-7b-chat-hf'
+init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 'Qwen/Qwen2-7B', 'meta-llama/Llama-2-7b-chat-hf'
 
 # 检查点设置
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves

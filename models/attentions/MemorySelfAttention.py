@@ -136,6 +136,10 @@ class MemorySelfAttention(nn.Module):
         self.k_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
         self.v_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
 
+        self.q_memo_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.k_memo_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
+        self.v_memo_proj = nn.Linear(config.n_embd, self.head_dim * config.num_key_value_heads, bias=config.bias)
+
         # output projection
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)  # 注意这边的bias，qwen2是False，其他模型可能会变
         # regularization
@@ -162,6 +166,15 @@ class MemorySelfAttention(nn.Module):
             max_position_embeddings=32768,
             base=config.rope_theta,
         )
+
+    def init_memo_proj(self):
+        # 令memo_proj的参数和q,k,v_proj的参数相同
+        self.q_memo_proj.weight = self.q_proj.weight
+        self.q_memo_proj.bias = self.q_proj.bias
+        self.k_memo_proj.weight = self.k_proj.weight
+        self.k_memo_proj.bias = self.k_proj.bias
+        self.v_memo_proj.weight = self.v_proj.weight
+        self.v_memo_proj.bias = self.v_proj.bias
 
     def forward(self, x, short_term_memory_init=False, update_memory=False):
 
@@ -215,15 +228,32 @@ class MemorySelfAttention(nn.Module):
             memory_len = self.memory.get_len()
 
             # concatenate long_term_memory, short_term_memory and x
+            # if long_term_memory is not None:
+            #     seq = torch.cat([long_term_memory, short_term_memory, x], dim=1)
+            # else:
+            #     seq = torch.cat([short_term_memory, x], dim=1)
+            #
+            # q = self.q_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+            # k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            # v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+            # calculate long_term_memory and short_term_memory together
             if long_term_memory is not None:
-                seq = torch.cat([long_term_memory, short_term_memory, x], dim=1)
+                seq = torch.cat([long_term_memory, short_term_memory], dim=1)
             else:
-                seq = torch.cat([short_term_memory, x], dim=1)
+                seq = short_term_memory
 
-            q = self.q_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
-            k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-            v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            q_memory = self.q_memo_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+            k_memory = self.k_memo_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            v_memory = self.v_memo_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
+            q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+            k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+            v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+            q = torch.cat([q_memory, q], dim=2)
+            k = torch.cat([k_memory, k], dim=2)
+            v = torch.cat([v_memory, v], dim=2)
 
             print('kv_seq_len: ', k.shape[-2])
             print('q_seq_len: ', q.shape[-2])

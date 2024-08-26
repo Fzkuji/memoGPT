@@ -314,7 +314,7 @@ class GPT(nn.Module):
         # extra_keys = [k for k in sd_keys_hf if k not in sd_keys]
         # print(f"extra keys: {extra_keys}")
 
-        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        # assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
 
         """
         Copy Parameters
@@ -328,6 +328,10 @@ class GPT(nn.Module):
             assert sd_hf[k].shape == sd[k].shape
             with torch.no_grad():
                 sd[k].copy_(sd_hf[k])
+
+        for layer in model.model.layers:
+            layer.self_attn.init_memo_proj()
+
         print("loaded successfully")
         return model
 
