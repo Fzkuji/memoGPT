@@ -191,9 +191,9 @@ class MemorySelfAttention(nn.Module):
 
                 self.memory.init_short_term_memory(x)
 
-                q = self.q_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
-                k = self.k_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-                v = self.v_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+                q = self.q_memo_proj(x).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+                k = self.k_memo_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+                v = self.v_memo_proj(x).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
                 kv_seq_len = k.shape[-2]
 
