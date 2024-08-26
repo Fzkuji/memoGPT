@@ -275,6 +275,7 @@ class GPT(nn.Module):
             'meta-llama/Llama-2-7b-chat-hf': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=32,
                 n_embd=4096, hidden_size=4096, intermediate_size=11008, vocab_size=32000, torch_dtype=torch.float16, rms_norm_eps=1e-05,
                 bias=False, rope_theta=10000.0, rope_scaling=None),
+            'princeton-nlp/Sheared-LLaMA-1.3B': dict(n_layer=24, num_attention_heads=16, num_key_value_heads=16, n_embd=2048, hidden_size=2048, intermediate_size=5504, vocab_size=32000, torch_dtype=torch.float32, rms_norm_eps=1e-05, bias=False, rope_theta=10000.0, rope_scaling=None),
             'meta-llama/Meta-Llama-3.1-8B-Instruct': dict(n_layer=32, num_attention_heads=32, num_key_value_heads=8, n_embd=4096, intermediate_size=14336, vocab_size=128256, torch_dtype=torch.bfloat16, rms_norm_eps=1e-05, bias=False),
         }[model_type]
         config_args['model_type'] = model_type  # always True for GPT model checkpoints
