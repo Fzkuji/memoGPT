@@ -35,7 +35,7 @@ class MemoryPool(nn.Module):
         assert bsz <= self.batch_size, f"Batch size {bsz} is greater than the maximum batch size {self.batch_size}"
         assert seqlen == self.capacity, f"Sequence length {seqlen} is not equal to the capacity {self.capacity}"
 
-        self.pool[:bsz, :, :] = tensor.detach()
+        self.pool[:bsz, :, :] = tensor
 
     def clear(self):
         """ Clear the pool """
@@ -140,12 +140,10 @@ class Memory(nn.Module):
         torch.cuda.empty_cache()
 
     def init_short_term_memory(self, tensor):
-        self.short_term_memory.init(tensor.detach())
-        torch.cuda.empty_cache()
+        self.short_term_memory.init(tensor)
 
     def update_short_term_memory(self, tensor):
-        self.short_term_memory.update(tensor.detach())
-        torch.cuda.empty_cache()
+        self.short_term_memory.update(tensor)
 
     def get_long_term_memory(self, batch_size):
         long_term_memories = []
