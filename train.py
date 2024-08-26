@@ -105,7 +105,7 @@ if config.init_from == 'scratch':
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
     model_args = {k: getattr(model.config, k) for k in GPTConfig.__dataclass_fields__}
-elif config.init_from.startswith('Qwen') or config.init_from.startswith('meta'):
+elif config.init_from.startswith('Qwen') or config.init_from.startswith('meta') or config.init_from.startswith('princeton'):
     print(f"Initializing from {config.init_from} weights")
     model = GPT.from_pretrained(config.init_from, config_dict)
     # read off the created configs params, so we can store them into checkpoint correctly
