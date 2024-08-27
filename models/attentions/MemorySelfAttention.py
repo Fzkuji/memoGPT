@@ -255,8 +255,8 @@ class MemorySelfAttention(nn.Module):
             k = torch.cat([k_memory, k], dim=2)
             v = torch.cat([v_memory, v], dim=2)
 
-            print('kv_seq_len: ', k.shape[-2])
-            print('q_seq_len: ', q.shape[-2])
+            # print('kv_seq_len: ', k.shape[-2])
+            # print('q_seq_len: ', q.shape[-2])
 
             kv_seq_len = k.shape[-2]
             cos, sin = self.rotary_emb(v, seq_len=kv_seq_len)
