@@ -8,11 +8,11 @@ seed = 1337
 
 # 输出和日志
 out_dir = 'out-owt'
-eval_interval = 200
+eval_interval = 50
 eval_iters = 200
 eval_only = False
 
-log_interval = 10
+log_interval = 1
 wandb_log = True  # Feel free to turn on
 wandb_project = 'memoGPT'
 wandb_run_name = 'pretrain-16-256'
@@ -32,7 +32,7 @@ always_save_checkpoint = False  # Only save checkpoints if the validation loss i
 
 # 训练参数
 batch_size = 16
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 128
 max_iters = 60000
 lr_decay_iters = 500
 warmup_iters = 200  # how many steps to warm up for
@@ -56,7 +56,7 @@ rms_norm_eps = 1e-06
 input_block_size = 16
 memory_block_size = 16
 train_size_ratio = 16  # 32
-val_size_ratio = 16  # Need 22GB per 1024 * 1024 tokens long context
+val_size_ratio = 64  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio
 val_size = memory_block_size * val_size_ratio
 

@@ -133,8 +133,8 @@ def create_memory_mask(long_term_memory_size, short_term_memory_size, input_bloc
     mask = torch.tril(torch.ones(mask_size, mask_size))
     # Set the memory to 1
     # mask[:long_term_memory_size] = 0
-    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, long_term_memory_size-4:long_term_memory_size + short_term_memory_size + memory_block_size] = 1
-    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :long_term_memory_size-4] = 0
+    mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, long_term_memory_size:long_term_memory_size + short_term_memory_size + memory_block_size] = 1
+    # mask[long_term_memory_size:long_term_memory_size + short_term_memory_size, :long_term_memory_size] = 0
 
     # Modify the lower left corner of the combined input and memory block part to set the lower left memory_block_size x memory_block_size triangle to 0
     start_idx = long_term_memory_size + short_term_memory_size

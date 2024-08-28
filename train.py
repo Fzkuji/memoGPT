@@ -144,9 +144,9 @@ for k, v in model_args.items():
 # 现在可以使用 config.参数名 来访问配置了
 print(config)
 
-"""
-使用Lora代码
-"""
+# """
+# 使用Lora代码
+# """
 # from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 #
 # peft_config = LoraConfig(
@@ -155,10 +155,7 @@ print(config)
 #     lora_alpha=32,
 #     lora_dropout=0.1,
 #     target_modules=[
-#         "q_proj",
-#         "k_proj",
-#         "v_proj",
-#         "o_proj",
+#         "all-linear"
 #     ],
 #     task_type=TaskType.CAUSAL_LM,
 # )
