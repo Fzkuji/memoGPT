@@ -61,12 +61,12 @@ class MemoryQueue(nn.Module):
 
     def __init__(self, config, capacity, *tensor_dims, max_batch_size=64):
         super(MemoryQueue, self).__init__()
+
+        self.config = config
         self.batch_size = max_batch_size
         self.capacity = capacity
         self.tensor_dims = tensor_dims  # Dimensions of the tensor you expect to store
-        # self.queue_q = []  # Max: torch.zeros(max_batch_size, capacity, *tensor_dims)
         self.queue = []  # Max: torch.zeros(max_batch_size, capacity, *tensor_dims)
-        # self.queue_v = []
         self.index = 0
 
     def push(self, tensor):
@@ -79,8 +79,7 @@ class MemoryQueue(nn.Module):
             self.clear()
             print(f"Long-term memory cleared. Batch size changed from {self.batch_size} to {bsz}.")
 
-        self.queue.append(tensor.detach())
-        # self.queue_v.append(tensor_v.detach())
+        self.queue.append(tensor)
 
         if len(self.queue) > self.capacity:
             self.queue.pop(0)
@@ -134,7 +133,7 @@ class Memory(nn.Module):
         #     memory.update_rotary_emb(freqs_cis)
         for memory in self.long_term_memory:
             if tensor is not None:
-                carry_over = memory.push(tensor.detach())
+                carry_over = memory.push(tensor)
                 if not carry_over:
                     break
         torch.cuda.empty_cache()

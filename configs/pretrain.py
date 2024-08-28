@@ -9,13 +9,13 @@ seed = 1337
 # 输出和日志
 out_dir = 'out-owt'
 eval_interval = 200
-eval_iters = 100
+eval_iters = 200
 eval_only = False
 
 log_interval = 10
 wandb_log = True  # Feel free to turn on
 wandb_project = 'memoGPT'
-wandb_run_name = 'pretrain-64-1024'
+wandb_run_name = 'pretrain-16-256'
 
 # 数据和初始化
 train_mode = 'pretrain'  # pretrain, sft
@@ -31,7 +31,7 @@ init_from = 'Qwen/Qwen2-0.5B-Instruct'  # 'Qwen/Qwen2-0.5B-Instruct', 'resume', 
 always_save_checkpoint = False  # Only save checkpoints if the validation loss improves
 
 # 训练参数
-batch_size = 1
+batch_size = 16
 gradient_accumulation_steps = 4
 max_iters = 60000
 lr_decay_iters = 500
@@ -53,8 +53,8 @@ long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] 
 
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 64
-memory_block_size = 64
+input_block_size = 16
+memory_block_size = 16
 train_size_ratio = 16  # 32
 val_size_ratio = 16  # Need 22GB per 1024 * 1024 tokens long context
 train_size = memory_block_size * train_size_ratio

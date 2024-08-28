@@ -185,13 +185,13 @@ class GPT(nn.Module):
                 self.tokens_left_to_update_memory -= (seq_len - end_pos)
                 predict_len = seq_len - end_pos
                 end_pos = seq_len
-                start_pos = max(end_pos - input_block_size - memory_block_size, 0)
+                start_pos = max(end_pos - input_block_size, 0)
                 memory_update_flag = False
             else:
                 # 如果输入序列的长度大于更新记忆需要的 token 数
                 predict_len = self.tokens_left_to_update_memory
                 end_pos = end_pos + self.tokens_left_to_update_memory
-                start_pos = max(end_pos - input_block_size - memory_block_size, 0)
+                start_pos = max(end_pos - input_block_size, 0)
                 self.tokens_left_to_update_memory = memory_block_size
                 memory_update_flag = True
 
@@ -209,8 +209,7 @@ class GPT(nn.Module):
 
             # 当targets不为空且当前块的mask有1时，才保存logits
             if labels is not None:
-                if attention_mask is None or attention_mask[:,
-                                             output_start_pos:output_start_pos + predict_len].sum() > 0:
+                if attention_mask is None or attention_mask[:, output_start_pos:output_start_pos + predict_len].sum() > 0:
                     output = self.lm_head(self.model.norm(output))
                     logits[:, output_start_pos:output_start_pos + predict_len, :] = output[:, -predict_len:, :]
             else:
@@ -235,8 +234,7 @@ class GPT(nn.Module):
                 # 不确定什么长度，每个 memory_block_size 长度计算一次 loss
                 for i in range(0, input_len, memory_block_size):
                     segment_loss.append(
-                        F.cross_entropy(logits[i:i + memory_block_size, :], labels[i:i + memory_block_size],
-                                        ignore_index=-1))
+                        F.cross_entropy(logits[i:i + memory_block_size, :], labels[i:i + memory_block_size], ignore_index=-1))
 
                 # concert segment_losses to tensor
                 segment_loss = torch.stack(segment_loss)
