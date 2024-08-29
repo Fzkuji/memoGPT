@@ -53,7 +53,7 @@ long_term_memory_size = ([short_term_memory_size * long_term_memory_chunk_size] 
 
 bias = True  # Do we use bias inside LayerNorm and Linear layers?
 rms_norm_eps = 1e-06
-input_block_size = 16
+input_block_size = 64
 memory_block_size = 16
 train_size_ratio = 16  # 32
 val_size_ratio = 64  # Need 22GB per 1024 * 1024 tokens long context
