@@ -4,6 +4,7 @@ import pickle
 import math
 from contextlib import nullcontext
 from dataclasses import fields
+import datetime
 
 import torch
 from datasets import load_dataset, DatasetDict
@@ -39,7 +40,7 @@ config = TrainConfig(**filtered_config_dict)
 ddp = int(os.environ.get('RANK', -1)) != -1  # is this a ddp run?
 if ddp:
     print("using distributed data parallel")
-    init_process_group(backend=config.backend)
+    init_process_group(backend=config.backend, timeout=datetime.timedelta(seconds=3600))
     ddp_rank = int(os.environ['RANK'])
     ddp_local_rank = int(os.environ['LOCAL_RANK'])
     ddp_world_size = int(os.environ['WORLD_SIZE'])
