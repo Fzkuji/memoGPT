@@ -169,12 +169,13 @@ class MemorySelfAttention(nn.Module):
 
     def init_memo_proj(self):
         # 令memo_proj的参数和q,k,v_proj的参数相同
-        self.q_memo_proj.weight = self.q_proj.weight
-        self.q_memo_proj.bias = self.q_proj.bias
-        self.k_memo_proj.weight = self.k_proj.weight
-        self.k_memo_proj.bias = self.k_proj.bias
-        self.v_memo_proj.weight = self.v_proj.weight
-        self.v_memo_proj.bias = self.v_proj.bias
+        # 使用 copy_ 方法复制权重，而不是直接赋值
+        self.q_memo_proj.weight.data.copy_(self.q_proj.weight.data)
+        self.q_memo_proj.bias.data.copy_(self.q_proj.bias.data)
+        self.k_memo_proj.weight.data.copy_(self.k_proj.weight.data)
+        self.k_memo_proj.bias.data.copy_(self.k_proj.bias.data)
+        self.v_memo_proj.weight.data.copy_(self.v_proj.weight.data)
+        self.v_memo_proj.bias.data.copy_(self.v_proj.bias.data)
 
     def forward(self, x, short_term_memory_init=False, update_memory=False):
 
