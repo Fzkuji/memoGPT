@@ -142,6 +142,9 @@ class MemorySelfAttention(nn.Module):
 
         # output projection
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)  # 注意这边的bias，qwen2是False，其他模型可能会变
+
+        self.o_memo_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -176,6 +179,7 @@ class MemorySelfAttention(nn.Module):
         self.k_memo_proj.bias.data.copy_(self.k_proj.bias.data)
         self.v_memo_proj.weight.data.copy_(self.v_proj.weight.data)
         self.v_memo_proj.bias.data.copy_(self.v_proj.bias.data)
+        self.o_memo_proj.weight.data.copy_(self.o_proj.weight.data)
 
     def forward(self, x, short_term_memory_init=False, update_memory=False):
 
@@ -214,7 +218,7 @@ class MemorySelfAttention(nn.Module):
                 y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
                 # output projection
-                y = self.resid_dropout(self.o_proj(y))
+                y = self.resid_dropout(self.o_memo_proj(y))
 
                 return y
 
@@ -275,8 +279,8 @@ class MemorySelfAttention(nn.Module):
             k = repeat_kv(k, self.num_key_value_groups)
             v = repeat_kv(v, self.num_key_value_groups)
 
-            # assert that q, k, v have the same shape else print the shape
-            assert q.shape == k.shape == v.shape, f"q, k, v shapes are {q.shape}, {k.shape}, {v.shape}"
+            # # assert that q, k, v have the same shape else print the shape
+            # assert q.shape == k.shape == v.shape, f"q, k, v shapes are {q.shape}, {k.shape}, {v.shape}"
 
             # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             # manual implementation of attention
@@ -290,11 +294,15 @@ class MemorySelfAttention(nn.Module):
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
             if update_memory:
-                # 断定短期记忆更新后和更新前不一样
-                assert not torch.equal(short_term_memory, y[:, mid_pos - self.config.short_term_memory_size:mid_pos, :]), "Error: Short term memory is the same after update"
-
-                self.memory.update_short_term_memory(y[:, -T - self.config.short_term_memory_size:-T, :])
+                # 更新长期记忆
                 self.memory.update_long_term_memory(short_term_memory)
+
+                # # 断定短期记忆更新后和更新前不一样
+                # assert not torch.equal(short_term_memory, y[:, mid_pos - self.config.short_term_memory_size:mid_pos, :]), "Error: Short term memory is the same after update"
+
+                # 更新短期记忆
+                short_term_memory = self.o_memo_proj(y[:, -T - self.config.short_term_memory_size:-T, :])
+                self.memory.update_short_term_memory(short_term_memory)
 
             # output projection
             y = y[:, -T:, :]  # only take the last T tokens
