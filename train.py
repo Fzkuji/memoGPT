@@ -272,6 +272,13 @@ while True:
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
+        # Initialize the log data dictionary
+        log_data = {
+            "iter": iter_num,
+            "lr": lr,
+            "mfu": running_mfu * 100,  # convert to percentage
+        }
+
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % config.eval_interval == 0 and master_process:
             losses = estimate_loss(
@@ -286,16 +293,15 @@ while True:
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, train perplexity {losses['train_perplexity']:.4f}, val perplexity {losses['val_perplexity']:.4f}")
             print(f"train segment loss: {losses['train_segment_loss']}, val segment loss: {losses['val_segment_loss']}")
-            if config.wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "eval train loss": losses['train'],
-                    "eval val loss": losses['val'],
-                    "eval train perplexity": losses['train_perplexity'],
-                    "eval val perplexity": losses['val_perplexity'],
-                    "lr": lr,
-                    "mfu": running_mfu * 100,  # convert to percentage
-                })
+
+            # Update log_data with evaluation metrics
+            log_data.update({
+                "eval train loss": losses['train'],
+                "eval val loss": losses['val'],
+                "eval train perplexity": losses['train_perplexity'],
+                "eval val perplexity": losses['val_perplexity'],
+            })
+
             if losses['val'] < best_val_loss or config.always_save_checkpoint:
                 if iter_num > 0:
                     checkpoint = {
@@ -359,17 +365,21 @@ while True:
             if local_iter_num >= 5:  # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(config.batch_size * config.gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-            print(f"iter {iter_num}: loss {lossf:.4f}, loss per token {losspt:.4f}, tokens {trained_tokens},time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
-            if config.wandb_log:
-                wandb.log({
-                    "iter": iter_num,
-                    "loss": lossf,
-                    "loss per token": losspt,
-                    "tokens": trained_tokens,
-                    "time per step": dt * 1000,
-                    "lr": lr,
-                    "mfu": running_mfu * 100,  # convert to percentage
-                })
+            print(
+                f"iter {iter_num}: loss {lossf:.4f}, loss per token {losspt:.4f}, tokens {trained_tokens}, time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%")
+
+            # Update log_data with training metrics
+            log_data.update({
+                "loss": lossf,
+                "loss per token": losspt,
+                "tokens": trained_tokens,
+                "time per step": dt * 1000,
+            })
+
+        # Perform logging at the end of the iteration
+        if config.wandb_log and master_process:
+            wandb.log(log_data)
+
         iter_num += 1
         local_iter_num += 1
 
