@@ -377,7 +377,8 @@ while True:
             })
 
         # Perform logging at the end of the iteration
-        if config.wandb_log and master_process:
+        # 只有iter_num % config.eval_interval或者iter_num % config.log_interval的时候才会执行
+        if config.wandb_log and master_process and (iter_num % config.eval_interval == 0 or iter_num % config.log_interval == 0):
             wandb.log(log_data)
 
         iter_num += 1
