@@ -5,7 +5,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from models.attentions.Memory import Memory
-from models.memoryGPT.gpt2 import MLP, RMSNorm
+from models.networks import RMSNorm, MLP
+
 from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis, apply_separate_rotary_emb
 
 
