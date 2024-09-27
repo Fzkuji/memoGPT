@@ -64,9 +64,26 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x, short_term_memory_init=False, update_memory=False):
-        x = x + self.self_attn(self.input_layernorm(x), short_term_memory_init, update_memory)
-        x = x + self.mlp(self.post_attention_layernorm(x))
+        if short_term_memory_init:
+            x = self.self_attn(self.input_layernorm(x), short_term_memory_init, update_memory, x)
+        else:
+            x = x + self.self_attn(self.input_layernorm(x), short_term_memory_init, update_memory, x)
+            x = x + self.mlp(self.post_attention_layernorm(x))
         return x
+
+    def init_memo_mlp(self):
+        # 将mlp的参数复制给self_attn的mlp（分别拷贝）
+        self.self_attn.mlp.gate_proj.weight.data = self.mlp.gate_proj.weight.data
+        self.self_attn.mlp.up_proj.weight.data = self.mlp.up_proj.weight.data
+        self.self_attn.mlp.down_proj.weight.data = self.mlp.down_proj.weight.data
+
+        # 将input_layernorm和post_attention_layernorm的参数复制给self_attn的input_layernorm和post_attention_layernorm
+        self.self_attn.input_layernorm.weight.data = self.input_layernorm.weight.data
+        self.self_attn.post_attention_layernorm.weight.data = self.post_attention_layernorm.weight.data
+
+    def init_memo_network(self):
+        self.init_memo_mlp()
+        self.self_attn.init_memo_proj()
 
 
 class GPT(nn.Module):
@@ -328,7 +345,7 @@ class GPT(nn.Module):
                 sd[k].copy_(sd_hf[k])
 
         for layer in model.model.layers:
-            layer.self_attn.init_memo_proj()
+            layer.init_memo_network()
 
         print("loaded successfully")
         return model

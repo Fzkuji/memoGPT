@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from models.attentions.Memory import Memory
+from models.memoryGPT.gpt2 import MLP, RMSNorm
 from models.utils import apply_rotary_emb, create_memory_mask, precompute_freqs_cis, apply_separate_rotary_emb
 
 
@@ -170,6 +171,10 @@ class MemorySelfAttention(nn.Module):
             base=config.rope_theta,
         )
 
+        self.input_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
+        self.mlp = MLP(config)
+        self.post_attention_layernorm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
+
     def init_memo_proj(self):
         # 令memo_proj的参数和q,k,v_proj的参数相同
         # 使用 copy_ 方法复制权重，而不是直接赋值
@@ -181,7 +186,7 @@ class MemorySelfAttention(nn.Module):
         self.v_memo_proj.bias.data.copy_(self.v_proj.bias.data)
         self.o_memo_proj.weight.data.copy_(self.o_proj.weight.data)
 
-    def forward(self, x, short_term_memory_init=False, update_memory=False):
+    def forward(self, x, short_term_memory_init=False, update_memory=False, x_pre_norm=None):
 
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
@@ -219,6 +224,11 @@ class MemorySelfAttention(nn.Module):
 
                 # output projection
                 y = self.resid_dropout(self.o_memo_proj(y))
+                y = x_pre_norm + y
+
+                # mlp
+                y = self.post_attention_layernorm(y)
+                y = self.mlp(y)
 
                 return y
 
@@ -228,19 +238,8 @@ class MemorySelfAttention(nn.Module):
         else:
 
             short_term_memory = self.memory.get_short_term_memory(B)
-            # print(self.memory.get_len())
             long_term_memory = self.memory.get_long_term_memory(B)
             memory_len = self.memory.get_len()
-
-            # concatenate long_term_memory, short_term_memory and x
-            # if long_term_memory is not None:
-            #     seq = torch.cat([long_term_memory, short_term_memory, x], dim=1)
-            # else:
-            #     seq = torch.cat([short_term_memory, x], dim=1)
-            #
-            # q = self.q_proj(seq).view(B, -1, self.num_attention_heads, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
-            # k = self.k_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-            # v = self.v_proj(seq).view(B, -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
             # calculate long_term_memory and short_term_memory together
             if long_term_memory is not None:
@@ -279,13 +278,6 @@ class MemorySelfAttention(nn.Module):
             k = repeat_kv(k, self.num_key_value_groups)
             v = repeat_kv(v, self.num_key_value_groups)
 
-            # # assert that q, k, v have the same shape else print the shape
-            # assert q.shape == k.shape == v.shape, f"q, k, v shapes are {q.shape}, {k.shape}, {v.shape}"
-
-            # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-            # manual implementation of attention
-            # print("memory_len: ", memory_len)
-
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             att = att.masked_fill(self.bias[:, :, mid_pos-memory_len:mid_pos+T, mid_pos-memory_len:mid_pos+T] == 0, float('-inf'))
             att = F.softmax(att, dim=-1)
@@ -294,14 +286,23 @@ class MemorySelfAttention(nn.Module):
             y = y.transpose(1, 2).contiguous().view(B, -1, C)  # re-assemble all head outputs side by side
 
             if update_memory:
-                # 更新长期记忆
+                """更新长期记忆"""
                 self.memory.update_long_term_memory(short_term_memory)
 
-                # # 断定短期记忆更新后和更新前不一样
-                # assert not torch.equal(short_term_memory, y[:, mid_pos - self.config.short_term_memory_size:mid_pos, :]), "Error: Short term memory is the same after update"
+                """更新短期记忆"""
+                # o_memo_proj
+                short_term_memory = self.resid_dropout(self.o_memo_proj(y[:, -T - self.config.short_term_memory_size:-T, :]))
 
-                # 更新短期记忆
-                short_term_memory = self.o_memo_proj(y[:, -T - self.config.short_term_memory_size:-T, :])
+                # x + o_memo_proj
+                short_term_memory = x_pre_norm + short_term_memory
+
+                # mlp
+                short_term_memory = self.post_attention_layernorm(short_term_memory)
+                short_term_memory = x_pre_norm + self.mlp(short_term_memory)
+
+                # input_layer_norm
+                short_term_memory = self.input_layernorm(short_term_memory)
+
                 self.memory.update_short_term_memory(short_term_memory)
 
             # output projection
