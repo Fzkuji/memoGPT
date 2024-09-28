@@ -292,19 +292,17 @@ class MemorySelfAttention(nn.Module):
 
                 """更新短期记忆"""
                 # o_memo_proj
-                short_term_memory = self.resid_dropout(self.o_memo_proj(y[:, -T - self.config.short_term_memory_size:-T, :]))
-
-                # x + o_memo_proj
-                short_term_memory = x_pre_norm + short_term_memory
+                new_short_term_memory = self.resid_dropout(self.o_memo_proj(y[:, -T - self.config.short_term_memory_size:-T, :]))
+                new_short_term_memory = new_short_term_memory + short_term_memory
 
                 # mlp
-                short_term_memory = self.post_attention_layernorm(short_term_memory)
-                short_term_memory = x_pre_norm + self.mlp(short_term_memory)
+                new_short_term_memory = self.mlp(self.post_attention_layernorm(new_short_term_memory))
+                new_short_term_memory = new_short_term_memory + short_term_memory
 
                 # input_layer_norm
-                short_term_memory = self.input_layernorm(short_term_memory)
+                new_short_term_memory = self.input_layernorm(new_short_term_memory)
 
-                self.memory.update_short_term_memory(short_term_memory)
+                self.memory.update_short_term_memory(new_short_term_memory)
 
             # output projection
             y = y[:, -T:, :]  # only take the last T tokens
